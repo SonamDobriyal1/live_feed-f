@@ -1,0 +1,20 @@
+# Live feed + violence detection
+
+cd /Users/sonamdobriyal/Test/live_feed
+
+# Live violence monitor (recommended — uses sub-stream for speed)
+python3 violence_monitor.py
+
+# Main HD stream (slower)
+python3 violence_monitor.py --subtype 0
+
+# Raise threshold / run inference less often
+python3 violence_monitor.py --conf 0.75 --every 5
+
+# Headless (no window) — only save alerts
+python3 violence_monitor.py --headless --save-alerts
+
+# Plain live feed (no ML)
+python3 rtsp_viewer.py
+python3 rtsp_viewer.py --save recording.mp4
+python3 rtsp_viewer.py --snapshot
