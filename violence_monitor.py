@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from config import CAMERA_IP, CAMERA_PASS, CAMERA_USER, RTSP_PORT
+from notifier import AlertEvent, SupabaseWhatsAppNotifier, build_notifier_from_env
 from violence_detector import DEFAULT_WEIGHTS, ViolenceDetector, ViolenceResult
 
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
@@ -139,12 +140,21 @@ def draw_overlay(
 class AlertManager:
     """Saves snapshots + short clips when violence is confirmed."""
 
-    def __init__(self, out_dir: Path, cooldown_sec: float = 10.0, buffer_size: int = 75):
+    def __init__(
+        self,
+        out_dir: Path,
+        cooldown_sec: float = 10.0,
+        buffer_size: int = 75,
+        notifier: SupabaseWhatsAppNotifier | None = None,
+        channel: int = 1,
+    ):
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.cooldown_sec = cooldown_sec
         self.buffer: collections.deque = collections.deque(maxlen=buffer_size)
         self.last_alert_time = 0.0
+        self.notifier = notifier
+        self.channel = channel
         self.log_path = self.out_dir / "alerts.csv"
         if not self.log_path.exists():
             with open(self.log_path, "w", newline="") as f:
@@ -163,7 +173,8 @@ class AlertManager:
             return None
 
         self.last_alert_time = now
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        detected_at = datetime.now().astimezone()
+        stamp = detected_at.strftime("%Y%m%d_%H%M%S")
         snap_path = self.out_dir / f"alert_{stamp}.jpg"
         clip_path = self.out_dir / f"alert_{stamp}.mp4"
 
@@ -188,7 +199,7 @@ class AlertManager:
 
         with open(self.log_path, "a", newline="") as f:
             csv.writer(f).writerow([
-                datetime.now().isoformat(timespec="seconds"),
+                detected_at.isoformat(timespec="seconds"),
                 f"{result.confidence:.4f}",
                 result.label,
                 snap_path.name,
@@ -197,6 +208,19 @@ class AlertManager:
 
         print(f"\n  ALERT saved → {snap_path.name}"
               + (f" + {clip_path.name}" if clip_path else ""))
+
+        # Supabase + WhatsApp
+        if self.notifier:
+            self.notifier.notify(AlertEvent(
+                detected_at=detected_at,
+                confidence=result.confidence,
+                label=result.label,
+                camera_ip=CAMERA_IP,
+                channel=self.channel,
+                snapshot_path=snap_path.name,
+                clip_path=clip_path.name if clip_path else None,
+            ))
+
         return snap_path
 
 
@@ -208,13 +232,18 @@ def run_monitor(
     save_alerts: bool = True,
     headless: bool = False,
     display_scale: float = 0.5,
+    notifier: SupabaseWhatsAppNotifier | None = None,
+    channel: int = 1,
 ):
     w, h = info["width"], info["height"]
     if w == 0 or h == 0:
         w, h = 1920, 1080
 
     frame_size = w * h * 3
-    alert_mgr = AlertManager(Path("alerts")) if save_alerts else None
+    alert_mgr = (
+        AlertManager(Path("alerts"), notifier=notifier, channel=channel)
+        if save_alerts else None
+    )
 
     latest: ViolenceResult | None = None
     frame_count = 0
@@ -315,6 +344,10 @@ def main():
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--scale", type=float, default=0.5,
                         help="Display scale factor (default 0.5)")
+    parser.add_argument("--no-whatsapp", action="store_true",
+                        help="Skip Supabase/WhatsApp notifications")
+    parser.add_argument("--test-whatsapp", action="store_true",
+                        help="Send a test WhatsApp alert via Supabase and exit")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -322,6 +355,24 @@ def main():
     print(f"  Camera: {CAMERA_IP}  Channel: {args.channel}")
     print(f"  Weights: {args.weights}")
     print("=" * 60)
+
+    notifier = None if args.no_whatsapp else build_notifier_from_env()
+
+    if args.test_whatsapp:
+        if notifier is None or not notifier.enabled:
+            print("ERROR: Configure SUPABASE_URL and key in .env first "
+                  "(see supabase/WHATSAPP_SETUP.md)")
+            sys.exit(1)
+        result = notifier.notify(AlertEvent(
+            detected_at=datetime.now().astimezone(),
+            confidence=0.99,
+            label="violence",
+            camera_ip=CAMERA_IP,
+            channel=args.channel,
+            snapshot_path="test",
+        ))
+        print("Test result:", result)
+        sys.exit(0 if result.get("ok") else 1)
 
     if not Path(FFMPEG).exists() and not shutil.which("ffmpeg"):
         print("ERROR: ffmpeg not found. Install with: brew install ffmpeg")
@@ -335,6 +386,10 @@ def main():
     )
     print(f"  Classes: {detector.names}")
     print(f"  Threshold: {detector.conf_threshold:.0%}")
+    if notifier and notifier.enabled:
+        print("  WhatsApp: enabled (Supabase)")
+    else:
+        print("  WhatsApp: disabled (set .env to enable)")
 
     url = build_url(args.channel, args.subtype)
     print("\nConnecting to camera...")
@@ -352,6 +407,8 @@ def main():
         save_alerts=not args.no_alerts,
         headless=args.headless,
         display_scale=args.scale,
+        notifier=notifier,
+        channel=args.channel,
     )
 
 

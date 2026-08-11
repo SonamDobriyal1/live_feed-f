@@ -1,20 +1,28 @@
-# Live feed + violence detection
+# Live feed + violence detection + WhatsApp
 
 cd /Users/sonamdobriyal/Test/live_feed
 
-# Live violence monitor (recommended — uses sub-stream for speed)
+# --- WhatsApp via Supabase (one-time setup) ---
+# See: supabase/WHATSAPP_SETUP.md
+# 1) Run supabase/schema.sql in Supabase SQL Editor
+# 2) Deploy edge function + set Twilio secrets
+# 3) Fill .env from .env.example
+
+pip3 install -r requirements.txt
+cp .env.example .env   # then edit SUPABASE_URL / keys
+
+# Test WhatsApp only
+python3 violence_monitor.py --test-whatsapp
+
+# Live violence monitor (saves alert + Supabase + WhatsApp)
 python3 violence_monitor.py
 
-# Main HD stream (slower)
-python3 violence_monitor.py --subtype 0
+# Without WhatsApp
+python3 violence_monitor.py --no-whatsapp
 
-# Raise threshold / run inference less often
+# Stricter / less CPU
 python3 violence_monitor.py --conf 0.75 --every 5
-
-# Headless (no window) — only save alerts
-python3 violence_monitor.py --headless --save-alerts
 
 # Plain live feed (no ML)
 python3 rtsp_viewer.py
-python3 rtsp_viewer.py --save recording.mp4
 python3 rtsp_viewer.py --snapshot
