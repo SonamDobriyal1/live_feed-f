@@ -109,6 +109,46 @@ Then Python only needs to insert the row.
 
 ---
 
+## No Content Builder? Use Sandbox WhatsApp or SMS
+
+Twilio does **not** give free reusable “base” WhatsApp templates without
+Content Template Builder / WhatsApp Business approval.
+
+Use one of these instead:
+
+### Option A — WhatsApp Sandbox (free-form, no template)
+
+1. Twilio Console → Messaging → Try it out → **Send a WhatsApp message**
+2. On your phone, WhatsApp the join code to **+1 415 523 8886**
+3. Set secrets (already applied if you followed Agent setup):
+
+```bash
+supabase secrets set \
+  TWILIO_WHATSAPP_FROM=whatsapp:+14155238886 \
+  TWILIO_SMS_FROM=+17372508034 \
+  ALERT_CHANNEL=auto
+```
+
+4. Test:
+```bash
+python3 violence_monitor.py --test-whatsapp
+```
+
+### Option B — SMS fallback (works without WhatsApp templates)
+
+Same secrets as above. With `ALERT_CHANNEL=auto`, if WhatsApp fails the
+function sends an SMS from `TWILIO_SMS_FROM` to your phone.
+
+Force SMS only:
+```bash
+supabase secrets set ALERT_CHANNEL=sms
+```
+
+### Option C — Custom Content Template (later)
+
+When you get Content Builder access, create a template and set
+`TWILIO_CONTENT_SID=HXxxxx`.
+
 ## ContentSid Required (WhatsApp Business number)
 
 If you see `ContentSid Required`, your `TWILIO_WHATSAPP_FROM` is a **Business**
