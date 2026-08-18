@@ -12,6 +12,40 @@ from config import CAMERA_IP, CAMERA_PASS, CAMERA_USER, RTSP_PORT
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 
+_tls_verify_cache: dict[str, bool] = {}
+
+
+def _supports_tls_verify(binary: str) -> bool:
+    """Debian ffmpeg rejects -tls_verify; Homebrew/macOS accepts it."""
+    if binary not in _tls_verify_cache:
+        try:
+            r = subprocess.run(
+                [binary, "-h", "full"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            _tls_verify_cache[binary] = "-tls_verify" in (r.stdout + r.stderr)
+        except Exception:
+            _tls_verify_cache[binary] = False
+    return _tls_verify_cache[binary]
+
+
+def ffmpeg_input_opts() -> list[str]:
+    """ffmpeg input flags — keep minimal for broad ffmpeg version compatibility."""
+    opts = ["-loglevel", "warning"]
+    if _supports_tls_verify(FFMPEG):
+        opts += ["-tls_verify", "0"]
+    opts += ["-rtsp_transport", "tcp"]
+    return opts
+
+
+def ffprobe_input_opts() -> list[str]:
+    opts = ["-v", "error"]
+    if _supports_tls_verify(FFPROBE):
+        opts += ["-tls_verify", "0"]
+    return opts
+
 
 def build_rtsp_url(channel: int = 1, subtype: int = 0) -> str:
     """Build RTSPS URL. Password is kept literal — this camera rejects %24 for $."""
@@ -27,15 +61,6 @@ def mask_url(url: str) -> str:
     return url.replace(CAMERA_PASS, "****")
 
 
-def ffmpeg_input_opts() -> list[str]:
-    """ffmpeg input flags — keep minimal for broad ffmpeg version compatibility."""
-    return [
-        "-loglevel", "warning",
-        "-tls_verify", "0",
-        "-rtsp_transport", "tcp",
-    ]
-
-
 def probe_stream(url: str, timeout: int = 20) -> dict | None:
     """Return video stream metadata, or None if unreachable."""
     masked = mask_url(url)
@@ -43,8 +68,7 @@ def probe_stream(url: str, timeout: int = 20) -> dict | None:
     r = subprocess.run(
         [
             FFPROBE,
-            "-v", "error",
-            "-tls_verify", "0",
+            *ffprobe_input_opts(),
             "-select_streams", "v:0",
             "-show_entries", "stream=codec_name,width,height,r_frame_rate",
             "-of", "csv=p=0",
