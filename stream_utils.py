@@ -15,34 +15,34 @@ FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 _tls_verify_cache: dict[str, bool] = {}
 
 
-def _supports_tls_verify(binary: str) -> bool:
-    """Debian ffmpeg rejects -tls_verify; Homebrew/macOS accepts it."""
+def _accepts_tls_verify(binary: str) -> bool:
+    """Probe whether a binary actually accepts -tls_verify (help text lies on Debian ffmpeg)."""
     if binary not in _tls_verify_cache:
         try:
             r = subprocess.run(
-                [binary, "-h", "full"],
+                [binary, "-tls_verify", "0"],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=5,
             )
-            _tls_verify_cache[binary] = "-tls_verify" in (r.stdout + r.stderr)
+            text = (r.stderr + r.stdout).lower()
+            _tls_verify_cache[binary] = (
+                "option tls_verify not found" not in text
+                and "unrecognized option" not in text
+            )
         except Exception:
             _tls_verify_cache[binary] = False
     return _tls_verify_cache[binary]
 
 
 def ffmpeg_input_opts() -> list[str]:
-    """ffmpeg input flags — keep minimal for broad ffmpeg version compatibility."""
-    opts = ["-loglevel", "warning"]
-    if _supports_tls_verify(FFMPEG):
-        opts += ["-tls_verify", "0"]
-    opts += ["-rtsp_transport", "tcp"]
-    return opts
+    """ffmpeg input flags. Never pass -tls_verify here — Debian/Render rejects it."""
+    return ["-loglevel", "warning", "-rtsp_transport", "tcp"]
 
 
 def ffprobe_input_opts() -> list[str]:
     opts = ["-v", "error"]
-    if _supports_tls_verify(FFPROBE):
+    if _accepts_tls_verify(FFPROBE):
         opts += ["-tls_verify", "0"]
     return opts
 
@@ -128,10 +128,18 @@ class _StderrTail:
         return "\n".join(self._lines)
 
 
+_logged_ffmpeg_opts = False
+
+
 def open_ffmpeg_pipe(url: str, width: int, height: int) -> tuple[subprocess.Popen, _StderrTail]:
+    global _logged_ffmpeg_opts
+    input_opts = ffmpeg_input_opts()
+    if not _logged_ffmpeg_opts:
+        print(f"  ffmpeg args: {' '.join(input_opts)} -i <url> ...")
+        _logged_ffmpeg_opts = True
     cmd = [
         FFMPEG,
-        *ffmpeg_input_opts(),
+        *input_opts,
         "-i", url,
         "-an",
         "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
