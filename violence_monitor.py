@@ -33,66 +33,20 @@ from config import (
     ALERT_COOLDOWN_SEC,
     CAMERA_CHANNEL,
     CAMERA_IP,
-    CAMERA_PASS,
     CAMERA_SUBTYPE,
-    CAMERA_USER,
     DEPLOY_HEADLESS,
-    RTSP_PORT,
     VIOLENCE_CONF,
     VIOLENCE_EVERY_N,
 )
 from notifier import AlertEvent, AlertNotifier, build_notifier_from_env
+from stream_utils import (
+    FFMPEG,
+    build_rtsp_url,
+    log_stream_failure,
+    open_ffmpeg_pipe,
+    probe_stream,
+)
 from violence_detector import DEFAULT_WEIGHTS, ViolenceDetector, ViolenceResult
-
-FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
-
-
-def build_url(channel: int = 1, subtype: int = 0) -> str:
-    return (
-        f"rtsps://{CAMERA_USER}:{CAMERA_PASS}@{CAMERA_IP}:{RTSP_PORT}"
-        f"/video/live?channel={channel}&subtype={subtype}"
-    )
-
-
-def probe_stream(url: str) -> dict | None:
-    masked = url.replace(CAMERA_PASS, "****")
-    print(f"  Probing: {masked}")
-    r = subprocess.run(
-        [
-            FFPROBE, "-v", "error", "-tls_verify", "0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate",
-            "-of", "csv=p=0", url,
-        ],
-        capture_output=True, text=True, timeout=12,
-    )
-    if r.returncode != 0 or not r.stdout.strip():
-        return None
-    parts = r.stdout.strip().split("\n")[0].split(",")
-    return {
-        "codec": parts[0] if len(parts) > 0 else "?",
-        "width": int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0,
-        "height": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0,
-        "fps_str": parts[3] if len(parts) > 3 else "25/1",
-    }
-
-
-def open_ffmpeg_pipe(url: str, width: int, height: int) -> subprocess.Popen:
-    cmd = [
-        FFMPEG,
-        "-loglevel", "error",
-        "-tls_verify", "0",
-        "-rtsp_transport", "tcp",
-        "-i", url,
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-        "-f", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-",
-    ]
-    return subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        bufsize=10 * width * height * 3,
-    )
 
 
 def draw_overlay(
@@ -249,7 +203,8 @@ def run_monitor(
 ):
     w, h = info["width"], info["height"]
     if w == 0 or h == 0:
-        w, h = 1920, 1080
+        print("ERROR: Could not determine stream resolution from ffprobe.")
+        sys.exit(1)
 
     frame_size = w * h * 3
     alert_mgr = (
@@ -273,13 +228,19 @@ def run_monitor(
     print(f"Inference every {every_n} frame(s)  |  threshold={detector.conf_threshold:.0%}")
     print("Press 'q' to quit, 's' for snapshot\n")
 
+    reconnects = 0
     while True:
-        proc = open_ffmpeg_pipe(url, w, h)
+        proc, stderr_tail = open_ffmpeg_pipe(url, w, h)
         try:
             while True:
                 raw = proc.stdout.read(frame_size)
                 if len(raw) != frame_size:
-                    print("Stream interrupted — reconnecting in 2s...")
+                    reconnects += 1
+                    log_stream_failure(proc, stderr_tail, len(raw), frame_size)
+                    if reconnects == 1 or reconnects % 10 == 0:
+                        print(f"Stream interrupted — reconnecting in 2s... (attempt {reconnects})")
+                    else:
+                        print("Stream interrupted — reconnecting in 2s...")
                     time.sleep(2)
                     break
 
@@ -370,6 +331,8 @@ def main():
                         help="Send test SMS + log to Supabase, then exit")
     parser.add_argument("--test-log", action="store_true",
                         help="Log a test detection to Supabase only (no SMS)")
+    parser.add_argument("--probe-only", action="store_true",
+                        help="Test camera connection and print stream info, then exit")
     parser.add_argument("--no-whatsapp", action="store_true",
                         help="Deprecated alias for --no-sms")
     parser.add_argument("--test-whatsapp", action="store_true",
@@ -436,13 +399,27 @@ def main():
     else:
         print("  Alerts: disabled (set SUPABASE_LOGGING or SMS in .env)")
 
-    url = build_url(args.channel, args.subtype)
+    url = build_rtsp_url(args.channel, args.subtype)
     print("\nConnecting to camera...")
     info = probe_stream(url)
     if not info:
         print("ERROR: Could not open stream. Check network / credentials.")
+        print("  Tips: ensure port 554 is reachable from Render; use CAMERA_SUBTYPE=1;")
+        print("  verify CAMERA_PASS in Render (special chars like $ must match exactly).")
         sys.exit(1)
     print(f"  Connected: {info['width']}x{info['height']} {info['codec']}")
+
+    if args.probe_only:
+        proc, stderr_tail = open_ffmpeg_pipe(url, info["width"], info["height"])
+        frame_size = info["width"] * info["height"] * 3
+        raw = proc.stdout.read(frame_size)
+        proc.terminate()
+        if len(raw) == frame_size:
+            print("  First frame: OK")
+            sys.exit(0)
+        log_stream_failure(proc, stderr_tail, len(raw), frame_size)
+        print("ERROR: Connected but could not read a full video frame.")
+        sys.exit(1)
 
     run_monitor(
         url=url,
