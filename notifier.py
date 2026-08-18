@@ -1,21 +1,20 @@
 """
-Supabase + WhatsApp notifier for violence alerts.
+Alert notifier: Twilio SMS + Supabase detection logging.
 
-Flow:
-  1. Insert alert row into Supabase `violence_alerts`
-  2. Invoke Edge Function `send-violence-whatsapp` (Twilio WhatsApp)
-
-Env vars (put in .env next to this file):
+Configure in .env:
+  SMS_TO=+919354501373,+919876543210
+  SUPABASE_LOGGING=true
   SUPABASE_URL=https://xxxx.supabase.co
-  SUPABASE_ANON_KEY=eyJ...
-  SUPABASE_SERVICE_ROLE_KEY=eyJ...   # optional, preferred for inserts
-  WHATSAPP_ENABLED=true
-  # Edge function is used by default; Twilio secrets live in Supabase
+  SUPABASE_SERVICE_ROLE_KEY=eyJ...
+
+On violence detection notify() will:
+  1. Insert a row into Supabase violence_alerts (if SUPABASE_LOGGING=true)
+  2. Send SMS to all numbers in SMS_TO (if SMS_ENABLED=true)
 """
 
 from __future__ import annotations
 
-import os
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +23,23 @@ from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
+
+from config import (
+    SMS_ENABLED,
+    SMS_TO,
+    SUPABASE_ANON_KEY,
+    SUPABASE_LOGGING,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_URL,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_CONTENT_SID,
+    TWILIO_SMS_FROM,
+    TWILIO_SMS_MODE,
+    TWILIO_SMS_TEMPLATE,
+    TWILIO_SMS_USE_TEMPLATE,
+    parse_sms_recipients,
+)
 
 
 @dataclass
@@ -39,7 +55,7 @@ class AlertEvent:
     def message_text(self) -> str:
         when = self.detected_at.astimezone().strftime("%d %b %Y, %I:%M:%S %p")
         return (
-            "⚠️ Possible Violence Detected\n\n"
+            "Possible Violence Detected\n\n"
             f"Time: {when}\n"
             f"Confidence: {self.confidence:.1%}\n"
             f"Camera: {self.camera_ip} (ch {self.channel})\n"
@@ -61,89 +77,243 @@ class AlertEvent:
         }
 
 
-class SupabaseWhatsAppNotifier:
-    """Inserts alerts into Supabase and triggers WhatsApp via Edge Function."""
+@dataclass
+class SmsSendResult:
+    to: str
+    sid: str | None = None
+    ok: bool = False
+    error: str | None = None
+
+
+class AlertNotifier:
+    """Send SMS via Twilio; log every detection to Supabase."""
 
     def __init__(
         self,
-        supabase_url: str | None = None,
-        supabase_key: str | None = None,
-        enabled: bool | None = None,
-        function_name: str = "send-violence-whatsapp",
+        sms_enabled: bool | None = None,
+        recipients: list[str] | None = None,
+        supabase_logging: bool | None = None,
     ):
-        self.url = (supabase_url or os.getenv("SUPABASE_URL", "")).rstrip("/")
-        self.key = (
-            supabase_key
-            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_ANON_KEY")
-            or ""
+        self.sms_enabled = sms_enabled if sms_enabled is not None else SMS_ENABLED
+        self.supabase_logging = (
+            supabase_logging if supabase_logging is not None else SUPABASE_LOGGING
         )
-        env_flag = os.getenv("WHATSAPP_ENABLED", "true").lower()
-        self.enabled = enabled if enabled is not None else env_flag in ("1", "true", "yes")
-        self.function_name = function_name
-        self._client = None
+        self.recipients = recipients if recipients is not None else parse_sms_recipients(SMS_TO)
+        self._twilio = None
+        self._supabase = None
 
-        if not self.url or not self.key:
-            print(
-                "  [notifier] SUPABASE_URL / key not set — "
-                "alerts will stay local only (no WhatsApp)."
-            )
-            self.enabled = False
+        self._init_supabase()
+        self._init_sms()
+
+    @property
+    def enabled(self) -> bool:
+        """True if SMS or Supabase logging is active."""
+        return self.sms_enabled or self._supabase is not None
+
+    def _init_supabase(self) -> None:
+        if not self.supabase_logging:
+            return
+        if not SUPABASE_URL:
+            print("  [notifier] SUPABASE_LOGGING=true but SUPABASE_URL missing")
+            return
+
+        key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY
+        if not key:
+            print("  [notifier] SUPABASE_LOGGING=true but no Supabase key in .env")
             return
 
         try:
             from supabase import create_client
-            self._client = create_client(self.url, self.key)
-            print("  [notifier] Supabase connected")
+            self._supabase = create_client(SUPABASE_URL, key)
+            print(f"  [notifier] Supabase logging → {SUPABASE_URL}")
         except Exception as e:
-            print(f"  [notifier] Failed to init Supabase client: {e}")
-            self.enabled = False
+            print(f"  [notifier] Supabase init failed: {e}")
 
-    def notify(self, event: AlertEvent) -> dict[str, Any]:
-        """
-        Save alert to Supabase and send WhatsApp.
-        Returns a small status dict.
-        """
-        if not self.enabled or self._client is None:
-            return {"ok": False, "reason": "disabled"}
+    def _init_sms(self) -> None:
+        if not self.sms_enabled:
+            print("  [notifier] SMS disabled (SMS_ENABLED=false)")
+            return
+
+        if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_SMS_FROM):
+            print("  [notifier] Twilio credentials missing — SMS disabled")
+            self.sms_enabled = False
+            return
+
+        if not self.recipients:
+            print("  [notifier] SMS_TO empty — SMS disabled")
+            self.sms_enabled = False
+            return
+
+        try:
+            from twilio.rest import Client
+            self._twilio = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            if TWILIO_SMS_MODE == "template" or (
+                TWILIO_SMS_USE_TEMPLATE and not TWILIO_CONTENT_SID
+            ):
+                print(
+                    f"  [notifier] SMS ready → {len(self.recipients)} recipient(s) "
+                    f"| template: {TWILIO_SMS_TEMPLATE}"
+                )
+            elif TWILIO_CONTENT_SID and TWILIO_SMS_MODE == "content":
+                print(
+                    f"  [notifier] SMS ready → {len(self.recipients)} recipient(s) "
+                    f"| ContentSid {TWILIO_CONTENT_SID[:8]}..."
+                )
+            elif TWILIO_CONTENT_SID:
+                print(
+                    f"  [notifier] SMS ready → {len(self.recipients)} recipient(s) "
+                    f"| auto (ContentSid → fallback {TWILIO_SMS_TEMPLATE})"
+                )
+            elif TWILIO_SMS_USE_TEMPLATE:
+                print(
+                    f"  [notifier] SMS ready → {len(self.recipients)} recipient(s) "
+                    f"| template: {TWILIO_SMS_TEMPLATE}"
+                )
+            else:
+                print(f"  [notifier] SMS ready → {len(self.recipients)} recipient(s) | free-form body")
+        except Exception as e:
+            print(f"  [notifier] Twilio init failed: {e}")
+            self.sms_enabled = False
+
+    def _content_variables(self, event: AlertEvent) -> dict[str, str]:
+        """Map alert fields to Content Template variables {{1}}, {{2}}, ..."""
+        when = event.detected_at.astimezone().strftime("%d %b %Y, %I:%M:%S %p")
+        return {
+            "1": when,
+            "2": f"{event.confidence:.1%}",
+            "3": f"{event.camera_ip} (ch {event.channel})",
+            "4": event.label,
+        }
+
+    def _try_create(self, to: str, kwargs: dict[str, Any]) -> SmsSendResult:
+        msg = self._twilio.messages.create(**kwargs)
+        return SmsSendResult(to=to, sid=msg.sid, ok=True)
+
+    def _send_one_sms(self, to: str, event: AlertEvent) -> SmsSendResult:
+        base = {"from_": TWILIO_SMS_FROM, "to": to}
+        errors: list[str] = []
+
+        def attempt(label: str, extra: dict[str, Any]) -> SmsSendResult | None:
+            try:
+                result = self._try_create(to, {**base, **extra})
+                if label != "template":
+                    print(f"  [notifier] SMS sent via {label}")
+                return result
+            except Exception as e:
+                err = str(e).strip()
+                errors.append(f"{label}: {err}")
+                return None
+
+        mode = TWILIO_SMS_MODE
+
+        # India trial template: Body must be the template name string
+        if mode == "template" or (
+            mode == "auto"
+            and TWILIO_SMS_USE_TEMPLATE
+            and TWILIO_SMS_TEMPLATE == "sms_internal_alerts"
+        ):
+            r = attempt("template", {"body": TWILIO_SMS_TEMPLATE})
+            if r:
+                return r
+            raise RuntimeError(errors[-1] if errors else "template send failed")
+
+        if mode == "content" or (mode == "auto" and TWILIO_CONTENT_SID):
+            # Try Content API — static template first (no variables)
+            r = attempt("content", {"content_sid": TWILIO_CONTENT_SID})
+            if r:
+                return r
+            # Then with variables {{1}}..{{4}}
+            r = attempt(
+                "content+vars",
+                {
+                    "content_sid": TWILIO_CONTENT_SID,
+                    "content_variables": json.dumps(self._content_variables(event)),
+                },
+            )
+            if r:
+                return r
+
+        if TWILIO_SMS_USE_TEMPLATE:
+            r = attempt("template", {"body": TWILIO_SMS_TEMPLATE})
+            if r:
+                return r
+
+        r = attempt("freeform", {"body": event.message_text()})
+        if r:
+            return r
+
+        raise RuntimeError("; ".join(errors) if errors else "SMS send failed")
+
+    def send_sms(self, event: AlertEvent) -> list[SmsSendResult]:
+        if not self.sms_enabled or self._twilio is None:
+            return []
+
+        results: list[SmsSendResult] = []
+        for to in self.recipients:
+            try:
+                result = self._send_one_sms(to, event)
+                print(f"  [notifier] SMS sent → {to}  sid={result.sid}")
+                results.append(result)
+            except Exception as e:
+                print(f"  [notifier] SMS failed → {to}: {e}")
+                results.append(SmsSendResult(to=to, ok=False, error=str(e)))
+
+        return results
+
+    def log_supabase(
+        self,
+        event: AlertEvent,
+        sms_ok: bool | None = None,
+        sms_error: str | None = None,
+    ) -> dict | None:
+        if self._supabase is None:
+            return None
 
         row = event.to_row()
-        inserted: dict[str, Any] | None = None
+        if sms_ok is None:
+            row["whatsapp_status"] = "logged"
+        else:
+            row["whatsapp_status"] = "sent" if sms_ok else "failed"
+        row["whatsapp_error"] = sms_error
 
         try:
-            resp = self._client.table("violence_alerts").insert(row).execute()
+            resp = self._supabase.table("violence_alerts").insert(row).execute()
             inserted = (resp.data or [None])[0]
-            print(f"  [notifier] Saved to Supabase id={inserted.get('id') if inserted else '?'}")
+            print(f"  [notifier] Logged to Supabase id={inserted.get('id') if inserted else '?'}")
+            return inserted
         except Exception as e:
             print(f"  [notifier] Supabase insert failed: {e}")
-            return {"ok": False, "reason": f"insert_failed: {e}"}
+            return None
 
-        # Invoke Edge Function (Twilio WhatsApp)
-        payload = inserted or row
-        try:
-            fn = self._client.functions.invoke(
-                self.function_name,
-                invoke_options={"body": payload},
-            )
-            # supabase-py may return bytes/str/dict depending on version
-            print(f"  [notifier] WhatsApp function response: {fn}")
-            return {"ok": True, "alert": inserted, "whatsapp": fn}
-        except Exception as e:
-            print(f"  [notifier] WhatsApp Edge Function failed: {e}")
-            # Mark failed on the row if we have an id
-            try:
-                if inserted and inserted.get("id"):
-                    self._client.table("violence_alerts").update({
-                        "whatsapp_status": "failed",
-                        "whatsapp_error": str(e),
-                    }).eq("id", inserted["id"]).execute()
-            except Exception:
-                pass
-            return {"ok": False, "reason": f"whatsapp_failed: {e}", "alert": inserted}
+    def notify(self, event: AlertEvent) -> dict[str, Any]:
+        if not self.enabled:
+            return {"ok": False, "reason": "disabled"}
+
+        sms_results = self.send_sms(event) if self.sms_enabled else []
+        any_sms_ok = any(r.ok for r in sms_results) if sms_results else None
+        first_error = next((r.error for r in sms_results if r.error), None)
+
+        supabase_row = self.log_supabase(
+            event,
+            sms_ok=any_sms_ok if sms_results else None,
+            sms_error=first_error,
+        )
+
+        ok = bool(supabase_row) or any(r.ok for r in sms_results)
+
+        return {
+            "ok": ok,
+            "sms": [{"to": r.to, "sid": r.sid, "ok": r.ok, "error": r.error} for r in sms_results],
+            "alert": supabase_row,
+            "reason": None if ok else (first_error or "notify_failed"),
+        }
 
 
-def build_notifier_from_env() -> SupabaseWhatsAppNotifier | None:
-    """Return a notifier if env is configured; otherwise None."""
-    if not os.getenv("SUPABASE_URL"):
+SupabaseWhatsAppNotifier = AlertNotifier
+
+
+def build_notifier_from_env() -> AlertNotifier | None:
+    if not SMS_ENABLED and not SUPABASE_LOGGING:
         return None
-    return SupabaseWhatsAppNotifier()
+    notifier = AlertNotifier()
+    return notifier if notifier.enabled else None

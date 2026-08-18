@@ -1,28 +1,21 @@
-# Live feed + violence detection + WhatsApp
+# Live feed + violence detection + SMS deployment
 
 cd /Users/sonamdobriyal/Test/live_feed
 
-# --- WhatsApp via Supabase (one-time setup) ---
-# See: supabase/WHATSAPP_SETUP.md
-# 1) Run supabase/schema.sql in Supabase SQL Editor
-# 2) Deploy edge function + set Twilio secrets
-# 3) Fill .env from .env.example
+# 1) Configure
+cp .env.example .env
+# Edit: CAMERA_*, SMS_TO, TWILIO_*
 
 pip3 install -r requirements.txt
-cp .env.example .env   # then edit SUPABASE_URL / keys
 
-# Test WhatsApp only
-python3 violence_monitor.py --test-whatsapp
+# 2) Test SMS
+python3 violence_monitor.py --test-sms
 
-# Live violence monitor (saves alert + Supabase + WhatsApp)
+# 3) Run live (headless when DEPLOY_HEADLESS=true)
 python3 violence_monitor.py
 
-# Without WhatsApp
-python3 violence_monitor.py --no-whatsapp
+# Docker deploy
+docker compose up -d --build
+docker compose logs -f
 
-# Stricter / less CPU
-python3 violence_monitor.py --conf 0.75 --every 5
-
-# Plain live feed (no ML)
-python3 rtsp_viewer.py
-python3 rtsp_viewer.py --snapshot
+# See DEPLOY.md for full VPS/systemd setup

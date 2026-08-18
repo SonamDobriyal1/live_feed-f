@@ -29,8 +29,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import CAMERA_IP, CAMERA_PASS, CAMERA_USER, RTSP_PORT
-from notifier import AlertEvent, SupabaseWhatsAppNotifier, build_notifier_from_env
+from config import (
+    ALERT_COOLDOWN_SEC,
+    CAMERA_CHANNEL,
+    CAMERA_IP,
+    CAMERA_PASS,
+    CAMERA_SUBTYPE,
+    CAMERA_USER,
+    DEPLOY_HEADLESS,
+    RTSP_PORT,
+    VIOLENCE_CONF,
+    VIOLENCE_EVERY_N,
+)
+from notifier import AlertEvent, AlertNotifier, build_notifier_from_env
 from violence_detector import DEFAULT_WEIGHTS, ViolenceDetector, ViolenceResult
 
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
@@ -145,7 +156,7 @@ class AlertManager:
         out_dir: Path,
         cooldown_sec: float = 10.0,
         buffer_size: int = 75,
-        notifier: SupabaseWhatsAppNotifier | None = None,
+        notifier: AlertNotifier | None = None,
         channel: int = 1,
     ):
         self.out_dir = out_dir
@@ -232,8 +243,9 @@ def run_monitor(
     save_alerts: bool = True,
     headless: bool = False,
     display_scale: float = 0.5,
-    notifier: SupabaseWhatsAppNotifier | None = None,
+    notifier: AlertNotifier | None = None,
     channel: int = 1,
+    cooldown_sec: float = ALERT_COOLDOWN_SEC,
 ):
     w, h = info["width"], info["height"]
     if w == 0 or h == 0:
@@ -241,7 +253,12 @@ def run_monitor(
 
     frame_size = w * h * 3
     alert_mgr = (
-        AlertManager(Path("alerts"), notifier=notifier, channel=channel)
+        AlertManager(
+            Path("alerts"),
+            notifier=notifier,
+            channel=channel,
+            cooldown_sec=cooldown_sec,
+        )
         if save_alerts else None
     )
 
@@ -330,39 +347,62 @@ def run_monitor(
 
 def main():
     parser = argparse.ArgumentParser(description="Live Violence Detection on CP Plus feed")
-    parser.add_argument("--channel", type=int, default=1)
-    parser.add_argument("--subtype", type=int, default=1, choices=[0, 1],
+    parser.add_argument("--channel", type=int, default=CAMERA_CHANNEL)
+    parser.add_argument("--subtype", type=int, default=CAMERA_SUBTYPE, choices=[0, 1],
                         help="0=main HD (slower), 1=sub-stream (recommended for ML)")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
-    parser.add_argument("--conf", type=float, default=0.60,
-                        help="Violence confidence threshold (default 0.60)")
-    parser.add_argument("--every", type=int, default=3,
-                        help="Run inference every N frames (default 3)")
+    parser.add_argument("--conf", type=float, default=VIOLENCE_CONF,
+                        help="Violence confidence threshold")
+    parser.add_argument("--every", type=int, default=VIOLENCE_EVERY_N,
+                        help="Run inference every N frames")
+    parser.add_argument("--cooldown", type=float, default=ALERT_COOLDOWN_SEC,
+                        help="Seconds between SMS alerts")
     parser.add_argument("--device", default=None, help="cpu / mps / 0")
     parser.add_argument("--save-alerts", action="store_true", default=True)
     parser.add_argument("--no-alerts", action="store_true")
-    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--headless", action="store_true",
+                        help="No display window (default from DEPLOY_HEADLESS in .env)")
     parser.add_argument("--scale", type=float, default=0.5,
                         help="Display scale factor (default 0.5)")
+    parser.add_argument("--no-sms", action="store_true",
+                        help="Skip SMS notifications")
+    parser.add_argument("--test-sms", action="store_true",
+                        help="Send test SMS + log to Supabase, then exit")
+    parser.add_argument("--test-log", action="store_true",
+                        help="Log a test detection to Supabase only (no SMS)")
     parser.add_argument("--no-whatsapp", action="store_true",
-                        help="Skip Supabase/WhatsApp notifications")
+                        help="Deprecated alias for --no-sms")
     parser.add_argument("--test-whatsapp", action="store_true",
-                        help="Send a test WhatsApp alert via Supabase and exit")
+                        help="Deprecated alias for --test-sms")
     args = parser.parse_args()
+
+    if args.no_whatsapp:
+        args.no_sms = True
+    if args.test_whatsapp:
+        args.test_sms = True
+
+    headless = args.headless or DEPLOY_HEADLESS
 
     print("=" * 60)
     print("  Violence Detection — Live Monitor")
     print(f"  Camera: {CAMERA_IP}  Channel: {args.channel}")
     print(f"  Weights: {args.weights}")
+    print(f"  Mode: {'headless (deploy)' if headless else 'display'}")
     print("=" * 60)
 
-    notifier = None if args.no_whatsapp else build_notifier_from_env()
+    notifier = None if args.no_alerts else build_notifier_from_env()
+    if notifier and args.no_sms:
+        notifier.sms_enabled = False
+        notifier._twilio = None
 
-    if args.test_whatsapp:
+    if args.test_log or args.test_sms:
         if notifier is None or not notifier.enabled:
-            print("ERROR: Configure SUPABASE_URL and key in .env first "
-                  "(see supabase/WHATSAPP_SETUP.md)")
+            print("ERROR: Set SUPABASE_LOGGING=true + Supabase keys in .env")
+            print("       (and Twilio keys for --test-sms)")
             sys.exit(1)
+        if args.test_log:
+            notifier.sms_enabled = False
+            notifier._twilio = None
         result = notifier.notify(AlertEvent(
             detected_at=datetime.now().astimezone(),
             confidence=0.99,
@@ -387,9 +427,14 @@ def main():
     print(f"  Classes: {detector.names}")
     print(f"  Threshold: {detector.conf_threshold:.0%}")
     if notifier and notifier.enabled:
-        print("  WhatsApp: enabled (Supabase)")
+        if notifier._supabase:
+            print("  Supabase: logging enabled")
+        if notifier.sms_enabled:
+            print(f"  SMS: enabled → {', '.join(notifier.recipients)}")
+        elif not notifier._supabase:
+            print("  Alerts: disabled")
     else:
-        print("  WhatsApp: disabled (set .env to enable)")
+        print("  Alerts: disabled (set SUPABASE_LOGGING or SMS in .env)")
 
     url = build_url(args.channel, args.subtype)
     print("\nConnecting to camera...")
@@ -405,10 +450,11 @@ def main():
         detector=detector,
         every_n=max(1, args.every),
         save_alerts=not args.no_alerts,
-        headless=args.headless,
+        headless=headless,
         display_scale=args.scale,
         notifier=notifier,
         channel=args.channel,
+        cooldown_sec=args.cooldown,
     )
 
 

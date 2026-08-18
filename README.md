@@ -1,18 +1,36 @@
-# CP Plus Camera Live Feed
+# CP Plus Camera Live Feed + Violence Detection
 
-Live video feed client for CP Plus / Dahua IP cameras.  
-Supports **RTSP**, **MJPEG over HTTP**, and **WebSocket** streaming.
+Live RTSPS feed from CP Plus cameras, YOLOv8 violence classification, and **SMS alerts via Twilio** on detection.
 
-## Quick Start
+## Deploy (production)
 
 ```bash
-# Install dependencies
+cp .env.example .env          # set CAMERA_*, SMS_TO, TWILIO_*
 pip3 install -r requirements.txt
+python3 violence_monitor.py --test-sms
+python3 violence_monitor.py     # runs headless if DEPLOY_HEADLESS=true
+```
 
-# Step 1: Check what's available on the camera
+**Docker:** `docker compose up -d --build`
+
+Full guide: **[DEPLOY.md](DEPLOY.md)** · Render: **[RENDER.md](RENDER.md)**
+
+### Render (cloud, no live feed)
+
+Push to GitHub → Render **Background Worker** (Docker) → set env vars in Dashboard.
+
+```yaml
+# render.yaml included — Blueprint deploy
+CAMERA_IP, CAMERA_USER, CAMERA_PASS, SMS_TO, TWILIO_* in Render env
+```
+
+See **[RENDER.md](RENDER.md)** for step-by-step.
+
+## Quick Start (local viewing)
+
+```bash
+pip3 install -r requirements.txt
 python3 probe.py
-
-# Step 2: Auto-detect the best stream method and display
 python3 live_feed.py
 ```
 
@@ -20,79 +38,26 @@ python3 live_feed.py
 
 | Script | Purpose |
 |--------|---------|
-| `probe.py` | Scan open ports, detect firmware, find working endpoints |
-| `live_feed.py` | Main entry point — auto-detects the best method |
-| `rtsp_viewer.py` | RTSP stream viewer (best quality) |
-| `mjpeg_viewer.py` | MJPEG HTTP stream viewer (simplest) |
-| `websocket_client.py` | WebSocket stream viewer (web-portal protocol) |
+| `violence_monitor.py` | **Production** — live ML + SMS alerts |
+| `live_feed.py` | Auto-detect stream method |
+| `rtsp_viewer.py` | RTSPS viewer |
+| `probe.py` | Port / endpoint scan |
 
-## Usage Examples
+## SMS configuration (`.env`)
 
-```bash
-# Auto mode (recommended)
-python3 live_feed.py
-
-# Specific channel
-python3 live_feed.py --channel 2
-
-# Force a specific method
-python3 live_feed.py --method rtsp
-python3 live_feed.py --method mjpeg
-python3 live_feed.py --method websocket
-
-# Save to file
-python3 live_feed.py --save recording.mp4
-
-# Capture a single snapshot PNG
-python3 live_feed.py --snapshot
-
-# Check which camera channels are active
-python3 live_feed.py --list-channels
-
-# RTSP sub-stream (lower resolution, less bandwidth)
-python3 live_feed.py --method rtsp --subtype 1
+```env
+SMS_TO=+919354501373,+919876543210
+TWILIO_ACCOUNT_SID=ACxxxx
+TWILIO_AUTH_TOKEN=...
+TWILIO_SMS_FROM=+17372508034
+TWILIO_SMS_TEMPLATE=sms_internal_alerts
 ```
 
-## Keyboard Controls (while viewing)
+Multiple numbers: comma-separated in `SMS_TO`.
+
+## Keyboard (when not headless)
 
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
-| `s` | Save snapshot |
-
-## Camera Details
-
-- **IP**: `223.230.3.31`
-- **Username**: `admin`
-- **RTSP Port**: `554`
-
-Edit `config.py` to change camera credentials or IP.
-
-## Troubleshooting
-
-**Can't connect?**
-- Ensure you are on the **same network** as the camera (or connected via VPN)
-- Run `python3 probe.py` to check which ports are reachable
-- The camera at `223.230.3.31` is a private/LAN IP — you must be on that LAN
-
-**Wrong RTSP URL format?**
-- Open the camera's web portal in Chrome
-- Press `F12` → **Network** tab → filter by `ws` (WebSocket) or `rtsp`
-- The exact URL used by the browser will appear there
-
-**WebSocket method not finding frames?**
-- Open the portal in Chrome DevTools → Network → WS tab
-- Find the WebSocket connection URL and pass it directly:
-  ```bash
-  python3 websocket_client.py --ws ws://223.230.3.31/your-ws-path
-  ```
-
-## How CP Plus WebSocket Streaming Works
-
-CP Plus cameras (which use Dahua firmware) implement WebSocket streaming via:
-
-1. **Dahua RPC2 WebSocket** (`/RPC2_WebSocket`) — JSON-RPC handshake followed by binary H.264/JPEG frames
-2. **JSMPEG WebSocket** — raw MJPEG frames pushed over WebSocket
-3. **Generic binary WebSocket** — JPEG frames embedded in binary messages
-
-The `websocket_client.py` tries all three patterns automatically.
+| `s` | Snapshot |
