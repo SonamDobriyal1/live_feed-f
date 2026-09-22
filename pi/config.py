@@ -7,7 +7,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
+_ENV_FILE = Path(__file__).parent / ".env"
+if not _ENV_FILE.exists():
+    raise FileNotFoundError(
+        f"Missing {_ENV_FILE}. Copy pi/.env.example to pi/.env and fill in values."
+    )
+load_dotenv(_ENV_FILE, override=True)
 
 # Camera
 CAMERA_IP = os.getenv("CAMERA_IP", "122.175.45.21")
@@ -47,8 +52,15 @@ VIOLENCE_WEIGHTS = os.getenv(
     "violence_yolov8n_cls-4/weights/best.pt",
 )
 VIOLENCE_CONF = float(os.getenv("VIOLENCE_CONF", "0.60"))
-VIOLENCE_EVERY_N = int(os.getenv("VIOLENCE_EVERY_N", "3"))
-ALERT_COOLDOWN_SEC = float(os.getenv("ALERT_COOLDOWN_SEC", "10"))
+VIOLENCE_EVERY_N = int(os.getenv("VIOLENCE_EVERY_N", "4"))
+ALERT_COOLDOWN_SEC = float(os.getenv("ALERT_COOLDOWN_SEC", "300"))
+# After a confirmed alert, skip YOLO for this many seconds (keeps Pi cool, cuts lag).
+INFER_PAUSE_AFTER_ALERT_SEC = float(os.getenv("INFER_PAUSE_AFTER_ALERT_SEC", "300"))
+# Decode smaller/slower frames in ffmpeg so Python is not flooded with 720p@25.
+DECODE_WIDTH = int(os.getenv("DECODE_WIDTH", "416"))
+DECODE_FPS = float(os.getenv("DECODE_FPS", "5"))
+SAVE_CLIPS = os.getenv("SAVE_CLIPS", "false").lower() in ("1", "true", "yes")
+TORCH_NUM_THREADS = int(os.getenv("TORCH_NUM_THREADS", "2"))
 
 # Deployment
 DEPLOY_HEADLESS = os.getenv("DEPLOY_HEADLESS", "true").lower() in ("1", "true", "yes")
@@ -77,6 +89,20 @@ SUPABASE_LOGGING = os.getenv("SUPABASE_LOGGING", "false").lower() in ("1", "true
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
+# Daycare identity (one Pi per site)
+DAYCARE_NAME = os.getenv("DAYCARE_NAME", "")
+DAYCARE_TZ = os.getenv("DAYCARE_TZ", "Asia/Kolkata")
+
+# Cloudinary — snapshots uploaded here, foldered per camera IP
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
+CLOUDINARY_FOLDER = os.getenv("CLOUDINARY_FOLDER", "daycares")
+
+# Web portal ingest (Pi posts detections after Cloudinary upload)
+PORTAL_URL = os.getenv("PORTAL_URL", "").rstrip("/")
+PORTAL_INGEST_KEY = os.getenv("PORTAL_INGEST_KEY", "")
 
 
 def parse_sms_recipients(raw: str | None = None) -> list[str]:

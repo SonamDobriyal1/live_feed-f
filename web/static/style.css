@@ -1,0 +1,106 @@
+:root {
+  --bg: #f4efe6;
+  --ink: #1f2a24;
+  --muted: #5c6b64;
+  --card: #fffdf8;
+  --line: #ddd4c4;
+  --accent: #1f6f57;
+  --accent-ink: #fff;
+  --warn: #9a3412;
+  --ok: #166534;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.45;
+}
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.card, .tile, header.top {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.card { max-width: 420px; padding: 32px; }
+header.top {
+  margin: 24px auto 16px;
+  max-width: 1100px;
+  padding: 20px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+section { max-width: 1100px; margin: 0 auto 40px; padding: 0 16px; }
+h1 { margin: 4px 0 8px; font-size: 1.6rem; }
+h2 { margin: 0 0 8px; }
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin: 0;
+}
+.lede, .meta, .hint, .empty { color: var(--muted); }
+label { display: block; margin: 14px 0 6px; font-weight: 600; }
+input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 1rem;
+}
+button, .ghost {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+button.secondary { background: #6b7280; }
+button.danger { background: var(--warn); }
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.actions form { margin: 0; }
+.actions button { margin-top: 8px; }
+.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+.tile img, .placeholder {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  background: #ece6da;
+  border-radius: 16px 16px 0 0;
+}
+.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.tile-body { padding: 12px 14px 16px; }
+.tile-body p { margin: 4px 0 0; font-size: 0.85rem; color: var(--muted); }
+.tile.saved { outline: 2px solid var(--accent); }
+.flash { max-width: 1100px; margin: 0 auto 12px; padding: 10px 16px; border-radius: 10px; }
+.flash.error { background: #fee2e2; color: var(--warn); }
+.flash.ok { background: #dcfce7; color: var(--ok); }
+.hint { font-size: 0.85rem; margin-top: 20px; }

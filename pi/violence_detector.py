@@ -8,13 +8,41 @@ Input size: 224x224
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+_HERE = Path(__file__).parent
+_REPO = _HERE.parent
+DEFAULT_WEIGHTS = next(
+    (
+        p
+        for p in (
+            _HERE / "violence_yolov8n_cls-4" / "weights" / "best.pt",
+            _REPO / "violence_yolov8n_cls-4" / "weights" / "best.pt",
+        )
+        if p.exists()
+    ),
+    _REPO / "violence_yolov8n_cls-4" / "weights" / "best.pt",
+)
+
+import cv2
 import numpy as np
 from ultralytics import YOLO
 
-DEFAULT_WEIGHTS = Path(__file__).parent / "violence_yolov8n_cls-4" / "weights" / "best.pt"
+from config import TORCH_NUM_THREADS
+
+os.environ.setdefault("OMP_NUM_THREADS", str(TORCH_NUM_THREADS))
+os.environ.setdefault("MKL_NUM_THREADS", str(TORCH_NUM_THREADS))
+
+try:
+    import torch
+
+    torch.set_num_threads(max(1, TORCH_NUM_THREADS))
+except Exception:
+    pass
+
+INFER_SIZE = 224
 
 
 @dataclass
@@ -41,7 +69,7 @@ class ViolenceDetector:
 
         self.model = YOLO(str(weights))
         self.conf_threshold = conf_threshold
-        self.device = device
+        self.device = device or "cpu"
         self.names = dict(self.model.names)  # {0: 'non_violence', 1: 'violence'}
         self.violence_idx = next(
             (i for i, n in self.names.items() if "violence" in n.lower() and "non" not in n.lower()),
@@ -50,10 +78,12 @@ class ViolenceDetector:
 
     def predict(self, frame_bgr: np.ndarray) -> ViolenceResult:
         """Classify a single BGR frame. Returns ViolenceResult."""
-        kwargs = {"verbose": False, "imgsz": 224}
-        if self.device:
-            kwargs["device"] = self.device
+        # Resize before YOLO so Pi does not copy a 720p tensor every infer.
+        h, w = frame_bgr.shape[:2]
+        if w != INFER_SIZE or h != INFER_SIZE:
+            frame_bgr = cv2.resize(frame_bgr, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_AREA)
 
+        kwargs = {"verbose": False, "imgsz": INFER_SIZE, "device": self.device}
         results = self.model.predict(frame_bgr, **kwargs)
         probs = results[0].probs
 

@@ -1,66 +1,37 @@
-# Render Blueprint — headless violence monitor (no live feed UI)
-# Docs: https://render.com/docs/background-workers
-#
-# Deploy: connect repo on Render → New Blueprint → select render.yaml
-# Or: New → Background Worker → Docker → point to this repo
+# Shared daycare dashboard — ML stays on each Raspberry Pi.
+# Deploy: Render → New → Blueprint → this repo
+# After live: set PORTAL_URL on every Pi to https://<this-service>.onrender.com
 
 services:
-  - type: worker
-    name: violence-monitor
+  - type: web
+    name: daycare-dashboard
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./web/Dockerfile
     dockerContext: .
-    # Starter plan recommended for 24/7 CCTV monitoring (free tier sleeps)
     plan: starter
     region: singapore
+    healthCheckPath: /health
     envVars:
-      - key: DEPLOY_HEADLESS
-        value: "true"
-      - key: SMS_ENABLED
-        value: "true"
       - key: PYTHONUNBUFFERED
         value: "1"
-
-      # --- Camera (set in Render Dashboard) ---
-      - key: CAMERA_IP
+      - key: DATA_DIR
+        value: /var/data
+      - key: DAYCARE_TZ
+        value: Asia/Kolkata
+      - key: PORTAL_INGEST_KEY
         sync: false
-      - key: CAMERA_USER
+      - key: PORTAL_SECRET_KEY
+        generateValue: true
+      - key: CLOUDINARY_CLOUD_NAME
         sync: false
-      - key: CAMERA_PASS
+      - key: CLOUDINARY_API_KEY
         sync: false
-      - key: RTSP_PORT
-        value: "554"
-      - key: CAMERA_CHANNEL
-        value: "1"
-      - key: CAMERA_SUBTYPE
-        value: "1"
-
-      # --- Model tuning ---
-      - key: VIOLENCE_CONF
-        value: "0.60"
-      - key: VIOLENCE_EVERY_N
-        value: "3"
-      - key: ALERT_COOLDOWN_SEC
-        value: "10"
-
-      # --- Twilio SMS (set secrets in Dashboard) ---
-      - key: TWILIO_ACCOUNT_SID
+      - key: CLOUDINARY_API_SECRET
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      # ip|camera-password|Daycare Name;ip|password|Other
+      - key: WEB_TENANTS
         sync: false
-      - key: TWILIO_SMS_FROM
-        sync: false
-      - key: SMS_TO
-        sync: false
-      - key: TWILIO_SMS_TEMPLATE
-        value: sms_internal_alerts
-      - key: TWILIO_SMS_USE_TEMPLATE
-        value: "true"
-
-      # --- Optional Supabase logging ---
-      - key: SUPABASE_LOGGING
-        value: "true"
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+    disk:
+      name: portal-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -1,63 +1,52 @@
-# CP Plus Camera Live Feed + Violence Detection
+# Daycare violence detection
 
-Live RTSPS feed from CP Plus cameras, YOLOv8 violence classification, and **SMS alerts via Twilio** on detection.
+Two separate services:
 
-## Deploy (production)
+| Folder | Runs on | Responsibility |
+|--------|---------|----------------|
+| **`pi/`** | Raspberry Pi at each daycare | Live camera feed, YOLO, upload snapshot to Cloudinary, POST metadata to web |
+| **`web/`** | One shared server / laptop / Render web | Login, dashboard, **Save / Delete**, midnight auto-purge |
+
+The Pi never deletes Cloudinary assets or dashboard rows. All UI and delete logic lives in `web/`.
+
+```
+Camera ──► Pi (ML) ──► Cloudinary (image)
+                 └──► Web API (metadata)
+                        └──► Dashboard (Save / Delete)
+```
+
+## Env files (separate per service)
+
+| File | Used by |
+|------|---------|
+| `pi/.env` | Raspberry Pi monitor |
+| `web/.env` | Dashboard |
 
 ```bash
-cp .env.example .env          # set CAMERA_*, SMS_TO, TWILIO_*
-pip3 install -r requirements.txt
-python3 violence_monitor.py --test-sms
-python3 violence_monitor.py     # runs headless if DEPLOY_HEADLESS=true
+cp pi/.env.example pi/.env
+cp web/.env.example web/.env
 ```
 
-**Docker:** `docker compose up -d --build`
-
-Full guide: **[DEPLOY.md](DEPLOY.md)** · Render: **[RENDER.md](RENDER.md)**
-
-### Render (cloud, no live feed)
-
-Push to GitHub → Render **Background Worker** (Docker) → set env vars in Dashboard.
-
-```yaml
-# render.yaml included — Blueprint deploy
-CAMERA_IP, CAMERA_USER, CAMERA_PASS, SMS_TO, TWILIO_* in Render env
-```
-
-See **[RENDER.md](RENDER.md)** for step-by-step.
-
-## Quick Start (local viewing)
+`PORTAL_INGEST_KEY` and `CLOUDINARY_*` must be the same in both files.
 
 ```bash
+cd pi
 pip3 install -r requirements.txt
-python3 probe.py
-python3 live_feed.py
+cp .env.example .env
+python3 violence_monitor.py --headless
 ```
 
-## Scripts
+## Web dashboard (once, for all daycares)
 
-| Script | Purpose |
-|--------|---------|
-| `violence_monitor.py` | **Production** — live ML + SMS alerts |
-| `live_feed.py` | Auto-detect stream method |
-| `rtsp_viewer.py` | RTSPS viewer |
-| `probe.py` | Port / endpoint scan |
-
-## SMS configuration (`.env`)
-
-```env
-SMS_TO=+919354501373,+919876543210
-TWILIO_ACCOUNT_SID=ACxxxx
-TWILIO_AUTH_TOKEN=...
-TWILIO_SMS_FROM=+17372508034
-TWILIO_SMS_TEMPLATE=sms_internal_alerts
+```bash
+cd web
+pip3 install -r requirements.txt
+python3 seed.py --ip 122.175.45.21 --password 'CAMERA_PASSWORD' --name 'Sunshine Daycare'
+python3 app.py
 ```
 
-Multiple numbers: comma-separated in `SMS_TO`.
+Open http://127.0.0.1:8080 — username = camera IP, password = camera password.
 
-## Keyboard (when not headless)
+**3+ daycares:** host `web/` once (Render or VPS) and point every Pi at that URL. See **[WEB_DEPLOY.md](WEB_DEPLOY.md)**.
 
-| Key | Action |
-|-----|--------|
-| `q` | Quit |
-| `s` | Snapshot |
+**Save** keeps a detection after midnight. **Delete** removes it from the portal and Cloudinary immediately.

@@ -17,12 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).parent / ".env")
 
 from config import (
     SMS_ENABLED,
@@ -51,6 +46,8 @@ class AlertEvent:
     channel: int = 1
     snapshot_path: str | None = None
     clip_path: str | None = None
+    snapshot_url: str | None = None
+    cloudinary_public_id: str | None = None
 
     def message_text(self) -> str:
         when = self.detected_at.astimezone().strftime("%d %b %Y, %I:%M:%S %p")
@@ -72,6 +69,8 @@ class AlertEvent:
             "label": self.label,
             "snapshot_path": self.snapshot_path,
             "clip_path": self.clip_path,
+            "snapshot_url": self.snapshot_url,
+            "cloudinary_public_id": self.cloudinary_public_id,
             "message": self.message_text(),
             "whatsapp_status": "pending",
         }
@@ -275,12 +274,22 @@ class AlertNotifier:
         else:
             row["whatsapp_status"] = "sent" if sms_ok else "failed"
         row["whatsapp_error"] = sms_error
+        # Keep insert compatible with older schemas that lack Cloudinary columns.
+        extra_keys = ("snapshot_url", "cloudinary_public_id")
+        attempts = [row, {k: v for k, v in row.items() if k not in extra_keys}]
 
         try:
-            resp = self._supabase.table("violence_alerts").insert(row).execute()
-            inserted = (resp.data or [None])[0]
-            print(f"  [notifier] Logged to Supabase id={inserted.get('id') if inserted else '?'}")
-            return inserted
+            last_err = None
+            for payload in attempts:
+                try:
+                    resp = self._supabase.table("violence_alerts").insert(payload).execute()
+                    inserted = (resp.data or [None])[0]
+                    print(f"  [notifier] Logged to Supabase id={inserted.get('id') if inserted else '?'}")
+                    return inserted
+                except Exception as e:
+                    last_err = e
+            print(f"  [notifier] Supabase insert failed: {last_err}")
+            return None
         except Exception as e:
             print(f"  [notifier] Supabase insert failed: {e}")
             return None

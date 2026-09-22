@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ daycare_name }} — Detections</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">{{ daycare_name }}</p>
+      <h1>Detection dashboard</h1>
+      <p class="meta">Camera {{ camera_ip }} · Unsaved items are deleted at midnight ({{ daycare_tz }})</p>
+    </div>
+    <a class="ghost" href="{{ url_for('logout') }}">Sign out</a>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <p class="flash {{ category }}">{{ message }}</p>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <section>
+    <h2>Today — not saved yet</h2>
+    <p class="lede">Save to keep after midnight. Delete removes it from the portal and Cloudinary immediately.</p>
+    {% if not today %}
+      <p class="empty">No unsaved detections right now.</p>
+    {% else %}
+      <div class="grid">
+        {% for row in today %}
+          <article class="tile">
+            {% if row.snapshot_url %}
+              <a href="{{ row.snapshot_url }}" target="_blank" rel="noopener">
+                <img src="{{ row.snapshot_url }}" alt="Detection snapshot">
+              </a>
+            {% else %}
+              <div class="placeholder">No snapshot</div>
+            {% endif %}
+            <div class="tile-body">
+              <strong>{{ "%.0f"|format(row.confidence * 100) }}% {{ row.label }}</strong>
+              <p>{{ row.detected_at }}</p>
+              <div class="actions">
+                <form method="post" action="{{ url_for('save_detection', det_id=row.id) }}">
+                  <button type="submit">Save</button>
+                </form>
+                <form method="post" action="{{ url_for('delete_detection', det_id=row.id) }}"
+                      onsubmit="return confirm('Delete this detection from the portal and Cloudinary?');">
+                  <button class="danger" type="submit">Delete</button>
+                </form>
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Saved archive</h2>
+    {% if not saved %}
+      <p class="empty">Nothing saved yet.</p>
+    {% else %}
+      <div class="grid">
+        {% for row in saved %}
+          <article class="tile saved">
+            {% if row.snapshot_url %}
+              <a href="{{ row.snapshot_url }}" target="_blank" rel="noopener">
+                <img src="{{ row.snapshot_url }}" alt="Saved snapshot">
+              </a>
+            {% else %}
+              <div class="placeholder">No snapshot</div>
+            {% endif %}
+            <div class="tile-body">
+              <strong>{{ "%.0f"|format(row.confidence * 100) }}% {{ row.label }}</strong>
+              <p>{{ row.detected_at }}</p>
+              <div class="actions">
+                <form method="post" action="{{ url_for('unsave_detection', det_id=row.id) }}">
+                  <button class="secondary" type="submit">Unsave</button>
+                </form>
+                <form method="post" action="{{ url_for('delete_detection', det_id=row.id) }}"
+                      onsubmit="return confirm('Permanently delete this saved detection?');">
+                  <button class="danger" type="submit">Delete</button>
+                </form>
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+</body>
+</html>

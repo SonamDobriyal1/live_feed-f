@@ -9,6 +9,20 @@ from collections import deque
 
 from config import CAMERA_IP, CAMERA_PASS, CAMERA_USER, RTSP_PORT
 
+
+def scaled_even(width: int, height: int, max_width: int | None) -> tuple[int, int]:
+    """Even dimensions; optionally downscale by width (keeps aspect ratio)."""
+    if width <= 0 or height <= 0:
+        return 2, 2
+    if max_width and width > max_width:
+        w = max(2, max_width - (max_width % 2))
+        h = max(2, int(height * w / width))
+        h -= h % 2
+        return w, h
+    w = max(2, width - (width % 2))
+    h = max(2, height - (height % 2))
+    return w, h
+
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 
@@ -131,18 +145,33 @@ class _StderrTail:
 _logged_ffmpeg_opts = False
 
 
-def open_ffmpeg_pipe(url: str, width: int, height: int) -> tuple[subprocess.Popen, _StderrTail]:
+def open_ffmpeg_pipe(
+    url: str,
+    width: int,
+    height: int,
+    out_width: int | None = None,
+    out_fps: float | None = None,
+) -> tuple[subprocess.Popen, _StderrTail, int, int]:
+    """Decode RTSPS to raw BGR. Optionally downscale and drop FPS (Pi-friendly)."""
     global _logged_ffmpeg_opts
+    out_w, out_h = scaled_even(width, height, out_width)
+    filters = [f"scale={out_w}:{out_h}:flags=fast_bilinear"]
+    if out_fps and out_fps > 0:
+        filters.append(f"fps={out_fps}")
+    vf = ",".join(filters)
+
     input_opts = ffmpeg_input_opts()
     if not _logged_ffmpeg_opts:
-        print(f"  ffmpeg args: {' '.join(input_opts)} -i <url> ...")
+        extra = f" vf={vf}"
+        print(f"  ffmpeg args: {' '.join(input_opts)} -i <url>{extra}")
         _logged_ffmpeg_opts = True
     cmd = [
         FFMPEG,
         *input_opts,
         "-i", url,
         "-an",
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-threads", "2",
+        "-vf", vf,
         "-f", "rawvideo",
         "-pix_fmt", "bgr24",
         "-",
@@ -151,9 +180,9 @@ def open_ffmpeg_pipe(url: str, width: int, height: int) -> tuple[subprocess.Pope
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=10 * width * height * 3,
+        bufsize=max(out_w * out_h * 3 * 4, 1_000_000),
     )
-    return proc, _StderrTail(proc)
+    return proc, _StderrTail(proc), out_w, out_h
 
 
 def log_stream_failure(proc: subprocess.Popen, stderr_tail: _StderrTail, got: int, expected: int) -> None:

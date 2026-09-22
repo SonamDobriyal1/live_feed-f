@@ -10,6 +10,8 @@ create table if not exists public.violence_alerts (
   label text not null default 'violence',
   snapshot_path text,
   clip_path text,
+  snapshot_url text,
+  cloudinary_public_id text,
   message text,
   whatsapp_status text default 'pending',  -- pending | sent | failed | skipped
   whatsapp_error text,

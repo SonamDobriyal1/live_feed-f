@@ -22,6 +22,7 @@ import csv
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -34,10 +35,17 @@ from config import (
     CAMERA_CHANNEL,
     CAMERA_IP,
     CAMERA_SUBTYPE,
+    DAYCARE_NAME,
+    DECODE_FPS,
+    DECODE_WIDTH,
     DEPLOY_HEADLESS,
+    INFER_PAUSE_AFTER_ALERT_SEC,
+    PORTAL_URL,
+    SAVE_CLIPS,
     VIOLENCE_CONF,
     VIOLENCE_EVERY_N,
 )
+from cloud_store import cloudinary_configured, publish_detection
 from notifier import AlertEvent, AlertNotifier, build_notifier_from_env
 from stream_utils import (
     FFMPEG,
@@ -103,15 +111,16 @@ def draw_overlay(
 
 
 class AlertManager:
-    """Saves snapshots + short clips when violence is confirmed."""
+    """Saves snapshots when violence is confirmed; uploads to Cloudinary off-thread."""
 
     def __init__(
         self,
         out_dir: Path,
         cooldown_sec: float = 10.0,
-        buffer_size: int = 75,
+        buffer_size: int = 20,
         notifier: AlertNotifier | None = None,
         channel: int = 1,
+        save_clips: bool = False,
     ):
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -120,6 +129,7 @@ class AlertManager:
         self.last_alert_time = 0.0
         self.notifier = notifier
         self.channel = channel
+        self.save_clips = save_clips
         self.log_path = self.out_dir / "alerts.csv"
         if not self.log_path.exists():
             with open(self.log_path, "w", newline="") as f:
@@ -128,7 +138,7 @@ class AlertManager:
                 )
 
     def push(self, frame: np.ndarray):
-        self.buffer.append(frame.copy())
+        self.buffer.append(frame)
 
     def maybe_alert(self, result: ViolenceResult) -> Path | None:
         now = time.time()
@@ -142,18 +152,17 @@ class AlertManager:
         stamp = detected_at.strftime("%Y%m%d_%H%M%S")
         snap_path = self.out_dir / f"alert_{stamp}.jpg"
         clip_path = self.out_dir / f"alert_{stamp}.mp4"
+        latest = self.buffer[-1] if self.buffer else None
 
-        # Snapshot = latest frame
-        if self.buffer:
-            cv2.imwrite(str(snap_path), self.buffer[-1])
+        if latest is not None:
+            cv2.imwrite(str(snap_path), latest, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
 
-        # Clip = buffered frames
-        if len(self.buffer) >= 5:
+        if self.save_clips and len(self.buffer) >= 5:
             h, w = self.buffer[0].shape[:2]
             writer = cv2.VideoWriter(
                 str(clip_path),
                 cv2.VideoWriter_fourcc(*"mp4v"),
-                12.0,
+                8.0,
                 (w, h),
             )
             for f in self.buffer:
@@ -174,18 +183,36 @@ class AlertManager:
         print(f"\n  ALERT saved → {snap_path.name}"
               + (f" + {clip_path.name}" if clip_path else ""))
 
-        # Supabase + WhatsApp
-        if self.notifier:
-            self.notifier.notify(AlertEvent(
-                detected_at=detected_at,
-                confidence=result.confidence,
-                label=result.label,
-                camera_ip=CAMERA_IP,
-                channel=self.channel,
-                snapshot_path=snap_path.name,
-                clip_path=clip_path.name if clip_path else None,
-            ))
+        frame_copy = latest.copy() if latest is not None else None
 
+        def _publish():
+            snapshot_url = None
+            public_id = None
+            if frame_copy is not None:
+                published = publish_detection(
+                    frame_copy,
+                    detected_at,
+                    result.confidence,
+                    result.label,
+                    self.channel,
+                )
+                cloud = published.get("cloudinary") or {}
+                snapshot_url = cloud.get("url")
+                public_id = cloud.get("public_id")
+            if self.notifier:
+                self.notifier.notify(AlertEvent(
+                    detected_at=detected_at,
+                    confidence=result.confidence,
+                    label=result.label,
+                    camera_ip=CAMERA_IP,
+                    channel=self.channel,
+                    snapshot_path=snap_path.name,
+                    clip_path=clip_path.name if clip_path else None,
+                    snapshot_url=snapshot_url,
+                    cloudinary_public_id=public_id,
+                ))
+
+        threading.Thread(target=_publish, daemon=True).start()
         return snap_path
 
 
@@ -193,26 +220,30 @@ def run_monitor(
     url: str,
     info: dict,
     detector: ViolenceDetector,
-    every_n: int = 3,
+    every_n: int = 4,
     save_alerts: bool = True,
     headless: bool = False,
     display_scale: float = 0.5,
     notifier: AlertNotifier | None = None,
     channel: int = 1,
     cooldown_sec: float = ALERT_COOLDOWN_SEC,
+    pause_after_alert_sec: float = INFER_PAUSE_AFTER_ALERT_SEC,
+    decode_width: int = DECODE_WIDTH,
+    decode_fps: float = DECODE_FPS,
 ):
-    w, h = info["width"], info["height"]
-    if w == 0 or h == 0:
+    src_w, src_h = info["width"], info["height"]
+    if src_w == 0 or src_h == 0:
         print("ERROR: Could not determine stream resolution from ffprobe.")
         sys.exit(1)
 
-    frame_size = w * h * 3
     alert_mgr = (
         AlertManager(
             Path("alerts"),
             notifier=notifier,
             channel=channel,
             cooldown_sec=cooldown_sec,
+            save_clips=SAVE_CLIPS,
+            buffer_size=20,
         )
         if save_alerts else None
     )
@@ -220,17 +251,27 @@ def run_monitor(
     latest: ViolenceResult | None = None
     frame_count = 0
     infer_count = 0
+    skipped_infer = 0
     start = time.time()
     consecutive_hits = 0
     alert_active = False
+    pause_until = 0.0
+    last_pause_log = 0.0
 
-    print(f"\nStream: {w}x{h} {info['codec'].upper()} @ {info['fps_str']}")
-    print(f"Inference every {every_n} frame(s)  |  threshold={detector.conf_threshold:.0%}")
+    print(f"\nSource: {src_w}x{src_h} {info['codec'].upper()} @ {info['fps_str']}")
+    print(
+        f"Decode ≤{decode_width}px @ {decode_fps:.0f} fps  |  "
+        f"infer every {every_n} frame(s)  |  threshold={detector.conf_threshold:.0%}"
+    )
+    print(f"ML pause after alert: {pause_after_alert_sec:.0f}s (Pi cooldown)")
     print("Press 'q' to quit, 's' for snapshot\n")
 
     reconnects = 0
     while True:
-        proc, stderr_tail = open_ffmpeg_pipe(url, w, h)
+        proc, stderr_tail, w, h = open_ffmpeg_pipe(
+            url, src_w, src_h, out_width=decode_width, out_fps=decode_fps,
+        )
+        frame_size = w * h * 3
         try:
             while True:
                 raw = proc.stdout.read(frame_size)
@@ -246,14 +287,22 @@ def run_monitor(
 
                 frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
                 frame_count += 1
+                now = time.time()
+                paused = now < pause_until
 
-                if alert_mgr:
-                    # Store downscaled frames in buffer to keep memory reasonable
-                    small = cv2.resize(frame, (min(960, w), int(min(960, w) * h / w)))
-                    alert_mgr.push(small)
+                if alert_mgr and not paused:
+                    # Already a small decoded frame — no extra copy.
+                    alert_mgr.push(frame)
 
-                # Run inference on a stride
-                if frame_count % every_n == 0:
+                if paused:
+                    skipped_infer += 1
+                    remaining = int(pause_until - now)
+                    if now - last_pause_log >= 60:
+                        print(f"  ML paused after alert — resume in {remaining}s")
+                        last_pause_log = now
+                    alert_active = False
+                    consecutive_hits = 0
+                elif frame_count % every_n == 0:
                     latest = detector.predict(frame)
                     infer_count += 1
 
@@ -262,16 +311,29 @@ def run_monitor(
                     else:
                         consecutive_hits = max(0, consecutive_hits - 1)
 
-                    # Require 2 consecutive hits to reduce false alarms
                     alert_active = consecutive_hits >= 2
                     if alert_active and alert_mgr:
-                        alert_mgr.maybe_alert(latest)
+                        fired = alert_mgr.maybe_alert(latest)
+                        if fired is not None and pause_after_alert_sec > 0:
+                            pause_until = time.time() + pause_after_alert_sec
+                            last_pause_log = time.time()
+                            consecutive_hits = 0
+                            print(
+                                f"  ML paused for {pause_after_alert_sec:.0f}s "
+                                "to keep the device cool"
+                            )
 
-                elapsed = time.time() - start
+                elapsed = now - start
                 fps = frame_count / elapsed if elapsed > 0 else 0
 
                 if not headless:
                     disp = draw_overlay(frame, latest, fps, alert_active)
+                    if paused:
+                        cv2.putText(
+                            disp, "ML PAUSED (cooldown)",
+                            (16, disp.shape[0] - 24),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2, cv2.LINE_AA,
+                        )
                     if display_scale != 1.0:
                         disp = cv2.resize(
                             disp, None, fx=display_scale, fy=display_scale,
@@ -285,9 +347,12 @@ def run_monitor(
                         fn = f"snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                         cv2.imwrite(fn, frame)
                         print(f"Snapshot: {fn}")
-                elif frame_count % 25 == 0:
+                elif frame_count % 25 == 0 and not paused:
                     status = latest or "warming up"
-                    print(f"  frames={frame_count}  infer={infer_count}  fps={fps:.1f}  {status}")
+                    print(
+                        f"  frames={frame_count}  infer={infer_count}  "
+                        f"skipped={skipped_infer}  fps={fps:.1f}  {status}"
+                    )
 
         except KeyboardInterrupt:
             break
@@ -301,7 +366,7 @@ def run_monitor(
     if not headless:
         cv2.destroyAllWindows()
 
-    print(f"\nDone. Frames={frame_count}  Inferences={infer_count}")
+    print(f"\nDone. Frames={frame_count}  Inferences={infer_count}  Skipped={skipped_infer}")
     if alert_mgr:
         print(f"Alerts folder: {alert_mgr.out_dir.resolve()}")
 
@@ -317,7 +382,13 @@ def main():
     parser.add_argument("--every", type=int, default=VIOLENCE_EVERY_N,
                         help="Run inference every N frames")
     parser.add_argument("--cooldown", type=float, default=ALERT_COOLDOWN_SEC,
-                        help="Seconds between SMS alerts")
+                        help="Seconds between SMS/portal alerts (default 300)")
+    parser.add_argument("--pause", type=float, default=INFER_PAUSE_AFTER_ALERT_SEC,
+                        help="Seconds to skip ML after an alert (default 300)")
+    parser.add_argument("--decode-width", type=int, default=DECODE_WIDTH,
+                        help="Max decode width in ffmpeg (default 416)")
+    parser.add_argument("--decode-fps", type=float, default=DECODE_FPS,
+                        help="Decode frame rate (default 5)")
     parser.add_argument("--device", default=None, help="cpu / mps / 0")
     parser.add_argument("--save-alerts", action="store_true", default=True)
     parser.add_argument("--no-alerts", action="store_true")
@@ -389,15 +460,22 @@ def main():
     )
     print(f"  Classes: {detector.names}")
     print(f"  Threshold: {detector.conf_threshold:.0%}")
+    print(f"  Daycare: {DAYCARE_NAME or CAMERA_IP}")
+    if cloudinary_configured():
+        print("  Cloudinary: enabled")
+    else:
+        print("  Cloudinary: not configured (set CLOUDINARY_* in .env)")
+    if PORTAL_URL:
+        print(f"  Portal: {PORTAL_URL}")
     if notifier and notifier.enabled:
         if notifier._supabase:
             print("  Supabase: logging enabled")
         if notifier.sms_enabled:
             print(f"  SMS: enabled → {', '.join(notifier.recipients)}")
         elif not notifier._supabase:
-            print("  Alerts: disabled")
+            print("  Alerts: Cloudinary/portal only")
     else:
-        print("  Alerts: disabled (set SUPABASE_LOGGING or SMS in .env)")
+        print("  SMS/Supabase: off (portal/Cloudinary still used if configured)")
 
     url = build_rtsp_url(args.channel, args.subtype)
     print("\nConnecting to camera...")
@@ -410,12 +488,15 @@ def main():
     print(f"  Connected: {info['width']}x{info['height']} {info['codec']}")
 
     if args.probe_only:
-        proc, stderr_tail = open_ffmpeg_pipe(url, info["width"], info["height"])
-        frame_size = info["width"] * info["height"] * 3
+        proc, stderr_tail, pw, ph = open_ffmpeg_pipe(
+            url, info["width"], info["height"],
+            out_width=args.decode_width, out_fps=args.decode_fps,
+        )
+        frame_size = pw * ph * 3
         raw = proc.stdout.read(frame_size)
         proc.terminate()
         if len(raw) == frame_size:
-            print("  First frame: OK")
+            print(f"  First frame: OK ({pw}x{ph})")
             sys.exit(0)
         log_stream_failure(proc, stderr_tail, len(raw), frame_size)
         print("ERROR: Connected but could not read a full video frame.")
@@ -432,6 +513,9 @@ def main():
         notifier=notifier,
         channel=args.channel,
         cooldown_sec=args.cooldown,
+        pause_after_alert_sec=args.pause,
+        decode_width=args.decode_width,
+        decode_fps=args.decode_fps,
     )
 
 
