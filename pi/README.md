@@ -3,7 +3,7 @@
 Runs on a Raspberry Pi next to the camera. It does **not** host the dashboard.
 
 1. Pull the RTSPS live feed
-2. Run YOLOv8 violence detection (pauses 5 minutes after an alert)
+2. Run YOLOv8 violence detection (pauses 15 minutes after an alert)
 3. Upload a JPEG to Cloudinary
 4. POST metadata to the **web** service (`PORTAL_URL`)
 

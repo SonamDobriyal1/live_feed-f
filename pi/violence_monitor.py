@@ -384,7 +384,7 @@ def main():
     parser.add_argument("--cooldown", type=float, default=ALERT_COOLDOWN_SEC,
                         help="Seconds between SMS/portal alerts (default 300)")
     parser.add_argument("--pause", type=float, default=INFER_PAUSE_AFTER_ALERT_SEC,
-                        help="Seconds to skip ML after an alert (default 300)")
+                        help="Seconds to skip ML after an alert (default 900)")
     parser.add_argument("--decode-width", type=int, default=DECODE_WIDTH,
                         help="Max decode width in ffmpeg (default 416)")
     parser.add_argument("--decode-fps", type=float, default=DECODE_FPS,

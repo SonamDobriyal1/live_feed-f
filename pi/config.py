@@ -55,7 +55,7 @@ VIOLENCE_CONF = float(os.getenv("VIOLENCE_CONF", "0.60"))
 VIOLENCE_EVERY_N = int(os.getenv("VIOLENCE_EVERY_N", "4"))
 ALERT_COOLDOWN_SEC = float(os.getenv("ALERT_COOLDOWN_SEC", "300"))
 # After a confirmed alert, skip YOLO for this many seconds (keeps Pi cool, cuts lag).
-INFER_PAUSE_AFTER_ALERT_SEC = float(os.getenv("INFER_PAUSE_AFTER_ALERT_SEC", "300"))
+INFER_PAUSE_AFTER_ALERT_SEC = float(os.getenv("INFER_PAUSE_AFTER_ALERT_SEC", "900"))
 # Decode smaller/slower frames in ffmpeg so Python is not flooded with 720p@25.
 DECODE_WIDTH = int(os.getenv("DECODE_WIDTH", "416"))
 DECODE_FPS = float(os.getenv("DECODE_FPS", "5"))
