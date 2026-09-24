@@ -3,29 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#061018">
   <title>Daycare Safety Portal</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body class="auth">
-  <main class="card">
-    <p class="eyebrow">Violence detection</p>
-    <h1>Daycare Safety Portal</h1>
-    <p class="lede">Sign in with your camera IP and camera password to view today’s detections for your centre only.</p>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, message in messages %}
-          <p class="flash {{ category }}">{{ message }}</p>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
-    <form method="post" autocomplete="off">
-      <label for="camera_ip">Camera IP (username)</label>
-      <input id="camera_ip" name="camera_ip" required placeholder="122.175.45.21" autofocus>
-      <label for="password">Camera password</label>
-      <input id="password" name="password" type="password" required>
-      <button type="submit">Open dashboard</button>
-    </form>
-    <p class="hint">Each daycare only sees detections from its own camera. Unsaved events are removed at midnight.</p>
-  </main>
+<body class="gate">
+  <div class="gate-layout">
+    <section class="gate-story" aria-label="About this console">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1.25" y="1.25" width="29.5" height="29.5" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="16" cy="16" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="16" cy="16" r="1.7" fill="currentColor"/>
+          <path d="M16 6.2v3.1M16 22.7v3.1M6.2 16h3.1M22.7 16h3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <p class="eyebrow">Safety surveillance</p>
+          <p class="brand-name">Daycare Safety Portal</p>
+        </div>
+      </div>
+      <h1>A private console for each centre.</h1>
+      <p class="story-copy">Review detections from your camera, keep the incidents that matter, and let the rest clear at midnight.</p>
+      <ol class="gate-points">
+        <li><span>01</span> Access is limited to your centre’s camera.</li>
+        <li><span>02</span> Today’s queue stays open until you save or midnight arrives.</li>
+        <li><span>03</span> Saved events remain in the archive with their frames.</li>
+      </ol>
+    </section>
+
+    <main class="gate-card">
+      <p class="eyebrow">Secure sign-in</p>
+      <h2>Open the console</h2>
+      <p class="lede">Use the camera IP as the username and the camera password.</p>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <p class="flash {{ category }}" role="alert">{{ message }}</p>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      <form method="post" autocomplete="off">
+        <div class="field">
+          <label for="camera_ip">Camera IP</label>
+          <input id="camera_ip" name="camera_ip" required placeholder="122.175.45.21" autofocus inputmode="decimal" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="password">Camera password</label>
+          <div class="field-control">
+            <input id="password" name="password" type="password" required>
+            <button class="field-toggle" type="button" data-toggle-password aria-controls="password" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <button class="btn primary full" type="submit">Enter console</button>
+      </form>
+      <p class="hint">Unsaved detections are removed at midnight in the centre’s local time.</p>
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='console.js') }}"></script>
 </body>
 </html>

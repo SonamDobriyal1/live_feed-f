@@ -109,12 +109,16 @@ def dashboard():
     rows = store.list_detections(camera_ip)
     saved = [r for r in rows if r["saved"]]
     today = [r for r in rows if not r["saved"]]
+    critical = sum(1 for row in rows if float(row["confidence"]) >= 0.8)
+    latest = rows[0] if rows else None
     return render_template(
         "dashboard.html",
         daycare_name=session.get("daycare_name") or camera_ip,
         camera_ip=camera_ip,
         today=today,
         saved=saved,
+        critical=critical,
+        latest=latest,
         daycare_tz=DAYCARE_TZ,
     )
 
@@ -154,6 +158,23 @@ def delete_detection(det_id: int):
         destroy_asset(public_id)
     flash("Detection deleted from the portal and Cloudinary.", "ok")
     return redirect(url_for("dashboard"))
+
+
+@app.route("/api/board")
+def api_board():
+    camera_ip = session.get("camera_ip")
+    if not camera_ip:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    rows = store.list_detections(camera_ip)
+    latest = rows[0] if rows else None
+    return jsonify(
+        {
+            "ok": True,
+            "pending": sum(1 for row in rows if not row["saved"]),
+            "saved": sum(1 for row in rows if row["saved"]),
+            "latest_id": int(latest["id"]) if latest else None,
+        }
+    )
 
 
 @app.route("/api/detections", methods=["POST"])
