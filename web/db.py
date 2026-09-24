@@ -42,7 +42,7 @@ def init_db() -> None:
                 label TEXT NOT NULL,
                 channel INTEGER NOT NULL DEFAULT 1,
                 snapshot_url TEXT,
-                cloudinary_public_id TEXT,
+                cloudinary_public_id TEXT, -- Supabase Storage object path
                 saved INTEGER NOT NULL DEFAULT 0,
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL

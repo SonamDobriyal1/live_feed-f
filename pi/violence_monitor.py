@@ -45,7 +45,7 @@ from config import (
     VIOLENCE_CONF,
     VIOLENCE_EVERY_N,
 )
-from cloud_store import cloudinary_configured, publish_detection
+from cloud_store import publish_detection, storage_configured
 from notifier import AlertEvent, AlertNotifier, build_notifier_from_env
 from stream_utils import (
     FFMPEG,
@@ -196,7 +196,7 @@ class AlertManager:
                     result.label,
                     self.channel,
                 )
-                cloud = published.get("cloudinary") or {}
+                cloud = published.get("storage") or {}
                 snapshot_url = cloud.get("url")
                 public_id = cloud.get("public_id")
             if self.notifier:
@@ -461,10 +461,10 @@ def main():
     print(f"  Classes: {detector.names}")
     print(f"  Threshold: {detector.conf_threshold:.0%}")
     print(f"  Daycare: {DAYCARE_NAME or CAMERA_IP}")
-    if cloudinary_configured():
-        print("  Cloudinary: enabled")
+    if storage_configured():
+        print("  Snapshots: Supabase Storage")
     else:
-        print("  Cloudinary: not configured (set CLOUDINARY_* in .env)")
+        print("  Snapshots: not configured (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)")
     if PORTAL_URL:
         print(f"  Portal: {PORTAL_URL}")
     if notifier and notifier.enabled:
@@ -473,9 +473,9 @@ def main():
         if notifier.sms_enabled:
             print(f"  SMS: enabled → {', '.join(notifier.recipients)}")
         elif not notifier._supabase:
-            print("  Alerts: Cloudinary/portal only")
+            print("  Alerts: portal only")
     else:
-        print("  SMS/Supabase: off (portal/Cloudinary still used if configured)")
+        print("  SMS/Supabase logging: off (snapshots and portal still used if configured)")
 
     url = build_rtsp_url(args.channel, args.subtype)
     print("\nConnecting to camera...")

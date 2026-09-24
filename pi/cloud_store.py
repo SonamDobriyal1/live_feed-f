@@ -1,4 +1,4 @@
-"""Pi-only: upload snapshots to Cloudinary and POST metadata to the web dashboard."""
+"""Pi-only: upload snapshots to Supabase Storage and POST metadata to the web dashboard."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ import numpy as np
 
 from config import (
     CAMERA_IP,
-    CLOUDINARY_API_KEY,
-    CLOUDINARY_API_SECRET,
-    CLOUDINARY_CLOUD_NAME,
-    CLOUDINARY_FOLDER,
     DAYCARE_NAME,
     PORTAL_INGEST_KEY,
     PORTAL_URL,
+    SUPABASE_ANON_KEY,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_STORAGE_BUCKET,
+    SUPABASE_URL,
 )
 
 
@@ -25,8 +25,25 @@ def _folder_slug(camera_ip: str) -> str:
     return camera_ip.replace(".", "-").replace(":", "-")
 
 
-def cloudinary_configured() -> bool:
-    return bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
+def storage_configured() -> bool:
+    return bool(SUPABASE_URL and (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY))
+
+
+def _storage_client():
+    from supabase import create_client
+
+    key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY
+    return create_client(SUPABASE_URL, key)
+
+
+def ensure_bucket(client) -> None:
+    bucket = SUPABASE_STORAGE_BUCKET
+    try:
+        client.storage.get_bucket(bucket)
+        return
+    except Exception:
+        pass
+    client.storage.create_bucket(bucket, options={"public": True})
 
 
 def upload_snapshot(
@@ -34,38 +51,27 @@ def upload_snapshot(
     detected_at: datetime,
     camera_ip: str = CAMERA_IP,
 ) -> dict[str, str]:
-    if not cloudinary_configured():
-        raise RuntimeError("Cloudinary credentials missing")
-
-    import cloudinary
-    import cloudinary.uploader
-
-    cloudinary.config(
-        cloud_name=CLOUDINARY_CLOUD_NAME,
-        api_key=CLOUDINARY_API_KEY,
-        api_secret=CLOUDINARY_API_SECRET,
-        secure=True,
-    )
+    if not storage_configured():
+        raise RuntimeError("Supabase URL or key missing")
 
     ok, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     if not ok:
         raise RuntimeError("Failed to encode JPEG snapshot")
 
     stamp = detected_at.strftime("%Y%m%d_%H%M%S")
-    folder = f"{CLOUDINARY_FOLDER}/{_folder_slug(camera_ip)}"
-    public_id = f"{folder}/alert_{stamp}"
-
-    result = cloudinary.uploader.upload(
+    object_path = f"{_folder_slug(camera_ip)}/alert_{stamp}.jpg"
+    client = _storage_client()
+    ensure_bucket(client)
+    store = client.storage.from_(SUPABASE_STORAGE_BUCKET)
+    store.upload(
+        object_path,
         buf.tobytes(),
-        public_id=public_id,
-        resource_type="image",
-        overwrite=True,
-        invalidate=True,
+        file_options={"content-type": "image/jpeg", "upsert": "true"},
     )
-    return {
-        "public_id": result.get("public_id", public_id),
-        "url": result.get("secure_url") or result.get("url") or "",
-    }
+    url = store.get_public_url(object_path)
+    if isinstance(url, dict):
+        url = url.get("publicUrl") or url.get("publicURL") or ""
+    return {"public_id": object_path, "url": str(url).rstrip("?")}
 
 
 def post_detection_to_web(payload: dict[str, Any], retries: int = 4) -> dict[str, Any] | None:
@@ -118,13 +124,13 @@ def publish_detection(
     channel: int,
 ) -> dict[str, Any]:
     """Upload snapshot then notify the web service. Safe on a background thread."""
-    out: dict[str, Any] = {"cloudinary": None, "web": None}
+    out: dict[str, Any] = {"storage": None, "web": None}
     try:
         uploaded = upload_snapshot(frame_bgr, detected_at)
-        out["cloudinary"] = uploaded
-        print(f"  [cloud] Cloudinary → {uploaded['url']}")
+        out["storage"] = uploaded
+        print(f"  [storage] Supabase → {uploaded['url']}")
     except Exception as e:
-        print(f"  [cloud] upload failed: {e}")
+        print(f"  [storage] upload failed: {e}")
         uploaded = {"public_id": "", "url": ""}
 
     web = post_detection_to_web({

@@ -61,7 +61,7 @@
               <button class="btn primary" type="submit">Save</button>
             </form>
           {% endif %}
-          <form method="post" action="{{ url_for('delete_detection', det_id=row.id) }}" data-confirm="Delete this detection from the portal and Cloudinary? The frame will be removed.">
+          <form method="post" action="{{ url_for('delete_detection', det_id=row.id) }}" data-confirm="Delete this detection from the portal and Supabase? The frame will be removed.">
             <button class="btn danger" type="submit">Delete</button>
           </form>
         </div>
@@ -179,7 +179,7 @@
           <p class="keys" aria-hidden="true"><kbd>1</kbd> queue <kbd>2</kbd> archive <kbd>/</kbd> search <kbd>←</kbd><kbd>→</kbd> move <kbd>esc</kbd> close</p>
 
           <div class="panel is-active" id="panel-queue" role="tabpanel" aria-labelledby="tab-queue">
-            <p class="lede">Save an event to keep it after midnight. Delete removes the record and the Cloudinary frame.</p>
+            <p class="lede">Save an event to keep it after midnight. Delete removes the record and the stored frame.</p>
             {% if not today %}
               <div class="empty-state">
                 <p class="empty-title">Queue is clear</p>
@@ -242,7 +242,7 @@
                 <button class="btn ghost" type="submit">Unsave</button>
               </form>
               <button class="btn ghost" type="button" id="inspector-expand">View frame</button>
-              <form id="inspect-delete" method="post" data-confirm="Delete this detection from the portal and Cloudinary? The frame will be removed.">
+              <form id="inspect-delete" method="post" data-confirm="Delete this detection from the portal and Supabase? The frame will be removed.">
                 <button class="btn danger" type="submit">Delete</button>
               </form>
             </div>

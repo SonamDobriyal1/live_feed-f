@@ -44,6 +44,27 @@ create policy "Allow update whatsapp status"
   using (true)
   with check (true);
 
+-- Snapshot files for the daycare portal (public read, service-role write)
+insert into storage.buckets (id, name, public)
+values ('detections', 'detections', true)
+on conflict (id) do update set public = excluded.public;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'Public read detection frames'
+  ) then
+    create policy "Public read detection frames"
+      on storage.objects
+      for select
+      to public
+      using (bucket_id = 'detections');
+  end if;
+end $$;
+
 -- Optional: notify Edge Function via Database Webhook
 -- Dashboard → Database → Webhooks → Create a new hook
 --   Table: violence_alerts

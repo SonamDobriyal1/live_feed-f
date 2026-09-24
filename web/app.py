@@ -1,6 +1,6 @@
 """Daycare web dashboard.
 
-Independent of the Pi ML service. Pi uploads to Cloudinary and POSTs here.
+Independent of the Pi ML service. Pi uploads frames to Supabase Storage and POSTs here.
 Save / delete / midnight purge all run on this service.
 Login: camera IP + camera password.
 """
@@ -21,7 +21,7 @@ from flask import (
 )
 
 import db as store
-from cloudinary_util import destroy_asset
+from storage_util import destroy_asset
 from config import (
     DAYCARE_TZ,
     PORTAL_DEBUG,
@@ -156,7 +156,7 @@ def delete_detection(det_id: int):
     store.delete_detection(det_id)
     if public_id:
         destroy_asset(public_id)
-    flash("Detection deleted from the portal and Cloudinary.", "ok")
+    flash("Detection deleted from the portal and Supabase.", "ok")
     return redirect(url_for("dashboard"))
 
 

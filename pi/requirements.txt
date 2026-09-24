@@ -6,4 +6,3 @@ torch>=2.0.0
 python-dotenv>=1.0.0
 twilio>=9.0.0
 supabase>=2.0.0
-cloudinary>=1.41.0

@@ -84,23 +84,18 @@ TWILIO_CONTENT_SID = os.getenv("TWILIO_CONTENT_SID", "")
 TWILIO_SMS_MODE = os.getenv("TWILIO_SMS_MODE", "auto").lower()
 SMS_TO = os.getenv("SMS_TO", "")
 
-# Optional Supabase logging
+# Supabase: alert rows, plus snapshot files in Storage
 SUPABASE_LOGGING = os.getenv("SUPABASE_LOGGING", "false").lower() in ("1", "true", "yes")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "detections")
 
 # Daycare identity (one Pi per site)
 DAYCARE_NAME = os.getenv("DAYCARE_NAME", "")
 DAYCARE_TZ = os.getenv("DAYCARE_TZ", "Asia/Kolkata")
 
-# Cloudinary — snapshots uploaded here, foldered per camera IP
-CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
-CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
-CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
-CLOUDINARY_FOLDER = os.getenv("CLOUDINARY_FOLDER", "daycares")
-
-# Web portal ingest (Pi posts detections after Cloudinary upload)
+# Web portal ingest (Pi posts detections after the Supabase Storage upload)
 PORTAL_URL = os.getenv("PORTAL_URL", "").rstrip("/")
 PORTAL_INGEST_KEY = os.getenv("PORTAL_INGEST_KEY", "")
 
