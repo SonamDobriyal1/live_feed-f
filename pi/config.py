@@ -53,6 +53,8 @@ VIOLENCE_WEIGHTS = os.getenv(
 )
 VIOLENCE_CONF = float(os.getenv("VIOLENCE_CONF", "0.60"))
 VIOLENCE_EVERY_N = int(os.getenv("VIOLENCE_EVERY_N", "4"))
+# Consecutive violence inferences required before an alert (~3s at 5 fps / every 4).
+CONFIRM_HITS = int(os.getenv("CONFIRM_HITS", "4"))
 ALERT_COOLDOWN_SEC = float(os.getenv("ALERT_COOLDOWN_SEC", "300"))
 # After a confirmed alert, skip YOLO for this many seconds (keeps Pi cool, cuts lag).
 INFER_PAUSE_AFTER_ALERT_SEC = float(os.getenv("INFER_PAUSE_AFTER_ALERT_SEC", "900"))

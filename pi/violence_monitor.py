@@ -35,6 +35,7 @@ from config import (
     CAMERA_CHANNEL,
     CAMERA_IP,
     CAMERA_SUBTYPE,
+    CONFIRM_HITS,
     DAYCARE_NAME,
     DECODE_FPS,
     DECODE_WIDTH,
@@ -140,7 +141,11 @@ class AlertManager:
     def push(self, frame: np.ndarray):
         self.buffer.append(frame)
 
-    def maybe_alert(self, result: ViolenceResult) -> Path | None:
+    def maybe_alert(
+        self,
+        result: ViolenceResult,
+        snapshot: np.ndarray | None = None,
+    ) -> Path | None:
         now = time.time()
         if not result.is_violence:
             return None
@@ -152,7 +157,10 @@ class AlertManager:
         stamp = detected_at.strftime("%Y%m%d_%H%M%S")
         snap_path = self.out_dir / f"alert_{stamp}.jpg"
         clip_path = self.out_dir / f"alert_{stamp}.mp4"
-        latest = self.buffer[-1] if self.buffer else None
+        # Prefer the highest-confidence frame from the confirmation window.
+        latest = snapshot if snapshot is not None else (
+            self.buffer[-1] if self.buffer else None
+        )
 
         if latest is not None:
             cv2.imwrite(str(snap_path), latest, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -180,8 +188,11 @@ class AlertManager:
                 clip_path.name if clip_path else "",
             ])
 
-        print(f"\n  ALERT saved → {snap_path.name}"
-              + (f" + {clip_path.name}" if clip_path else ""))
+        print(
+            f"\n  ALERT saved → {snap_path.name}  "
+            f"(highest-confidence frame {result.confidence:.0%})"
+            + (f" + {clip_path.name}" if clip_path else "")
+        )
 
         frame_copy = latest.copy() if latest is not None else None
 
@@ -230,6 +241,7 @@ def run_monitor(
     pause_after_alert_sec: float = INFER_PAUSE_AFTER_ALERT_SEC,
     decode_width: int = DECODE_WIDTH,
     decode_fps: float = DECODE_FPS,
+    confirm_hits: int = CONFIRM_HITS,
 ):
     src_w, src_h = info["width"], info["height"]
     if src_w == 0 or src_h == 0:
@@ -257,11 +269,17 @@ def run_monitor(
     alert_active = False
     pause_until = 0.0
     last_pause_log = 0.0
+    best_hit_frame: np.ndarray | None = None
+    best_hit_result: ViolenceResult | None = None
 
     print(f"\nSource: {src_w}x{src_h} {info['codec'].upper()} @ {info['fps_str']}")
     print(
         f"Decode ≤{decode_width}px @ {decode_fps:.0f} fps  |  "
         f"infer every {every_n} frame(s)  |  threshold={detector.conf_threshold:.0%}"
+    )
+    print(
+        f"Confirm after {confirm_hits} consecutive violence inferences "
+        f"(~{confirm_hits * every_n / decode_fps:.1f}s)"
     )
     print(f"ML pause after alert: {pause_after_alert_sec:.0f}s (Pi cooldown)")
     print("Press 'q' to quit, 's' for snapshot\n")
@@ -302,22 +320,39 @@ def run_monitor(
                         last_pause_log = now
                     alert_active = False
                     consecutive_hits = 0
+                    best_hit_frame = None
+                    best_hit_result = None
                 elif frame_count % every_n == 0:
                     latest = detector.predict(frame)
                     infer_count += 1
 
                     if latest.is_violence:
                         consecutive_hits += 1
+                        if (
+                            best_hit_result is None
+                            or latest.confidence > best_hit_result.confidence
+                        ):
+                            best_hit_frame = frame.copy()
+                            best_hit_result = latest
                     else:
                         consecutive_hits = max(0, consecutive_hits - 1)
+                        if consecutive_hits == 0:
+                            best_hit_frame = None
+                            best_hit_result = None
 
-                    alert_active = consecutive_hits >= 2
+                    alert_active = consecutive_hits >= confirm_hits
                     if alert_active and alert_mgr:
-                        fired = alert_mgr.maybe_alert(latest)
+                        upload_result = best_hit_result or latest
+                        fired = alert_mgr.maybe_alert(
+                            upload_result,
+                            snapshot=best_hit_frame,
+                        )
                         if fired is not None and pause_after_alert_sec > 0:
                             pause_until = time.time() + pause_after_alert_sec
                             last_pause_log = time.time()
                             consecutive_hits = 0
+                            best_hit_frame = None
+                            best_hit_result = None
                             print(
                                 f"  ML paused for {pause_after_alert_sec:.0f}s "
                                 "to keep the device cool"
@@ -381,6 +416,8 @@ def main():
                         help="Violence confidence threshold")
     parser.add_argument("--every", type=int, default=VIOLENCE_EVERY_N,
                         help="Run inference every N frames")
+    parser.add_argument("--confirm", type=int, default=CONFIRM_HITS,
+                        help="Consecutive violence inferences before an alert (default 4)")
     parser.add_argument("--cooldown", type=float, default=ALERT_COOLDOWN_SEC,
                         help="Seconds between SMS/portal alerts (default 300)")
     parser.add_argument("--pause", type=float, default=INFER_PAUSE_AFTER_ALERT_SEC,
@@ -460,6 +497,7 @@ def main():
     )
     print(f"  Classes: {detector.names}")
     print(f"  Threshold: {detector.conf_threshold:.0%}")
+    print(f"  Confirm hits: {max(1, args.confirm)}")
     print(f"  Daycare: {DAYCARE_NAME or CAMERA_IP}")
     if storage_configured():
         print("  Snapshots: Supabase Storage")
@@ -516,6 +554,7 @@ def main():
         pause_after_alert_sec=args.pause,
         decode_width=args.decode_width,
         decode_fps=args.decode_fps,
+        confirm_hits=max(1, args.confirm),
     )
 
 
